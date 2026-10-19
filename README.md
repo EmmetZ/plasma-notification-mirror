@@ -12,7 +12,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 
 ## Features
 
-- Zero-configuration two-monitor default: mirrors to the first non-primary monitor
+- Zero-configuration default: mirrors to every non-primary monitor
 - Optional multi-monitor modes
 - Configurable popup corner:
   - top-left
@@ -22,6 +22,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 - Independent margins for all four screen edges
 - Unrestricted margin offsets for large and high-resolution displays
 - Configurable popup background opacity
+- Independent per-screen popup settings and enable switches
 - Per-monitor notification stacking
 - Dynamic popup height
 - KDE-like compact layout and expiration bar
@@ -77,7 +78,7 @@ systemctl --user enable --now plasma-notification-mirror.service
 
 No configuration file is required.
 
-With two monitors, the first non-primary monitor is selected automatically and notifications appear in the bottom-right corner using the built-in defaults.
+Every non-primary monitor is selected automatically. Notifications appear in the bottom-right corner using the built-in defaults; the primary monitor is always left to Plasma.
 
 ### Manual installation
 
@@ -119,16 +120,20 @@ systemctl --user restart plasma-notification-mirror.service
 
 ```ini
 [General]
-mode=secondary
+mode=all-secondary
 ```
 
 Available values:
 
-- `secondary` — first non-primary monitor; default and zero-configuration behavior
-- `all-secondary` — every non-primary monitor
-- `screens` — only the monitors listed in `screens=`
-- `primary` — primary monitor only
-- `all` — every monitor
+- `all-secondary` — every enabled non-primary monitor; default
+- `secondary` — first enabled non-primary monitor
+- `screens` — enabled non-primary monitors listed in `screens=`
+- `all` — compatibility alias for `all-secondary`
+- `primary` — deprecated; selects no mirror targets
+
+The primary monitor is excluded in every mode, including when it is explicitly listed
+in `screens=`. Existing configurations that omit `mode` now select all secondary
+monitors; an explicit `mode=secondary` still selects only the first.
 
 Example for selected monitors:
 
@@ -145,15 +150,66 @@ no mirror target: the process stays running and resumes mirroring future notific
 when a secondary display becomes available. Plasma's original notifications continue
 normally.
 
-In `screens` mode, unavailable configured displays are skipped. If none are available,
-the first secondary display is used, as at startup. When a configured display returns,
-it is selected again. Popups belonging to removed targets are discarded; old notifications
+In `screens` mode, unavailable configured displays are skipped; there is no fallback
+to unlisted displays. This replaces the previous first-secondary fallback. When a
+configured display returns, it is selected again with its own settings. Popups belonging to removed targets are discarded; old notifications
 are not replayed onto newly connected targets.
 
 Monitor names can be viewed with:
 
 ```bash
 kscreen-doctor -o
+```
+
+### Per-screen configuration
+
+`[General]` supplies defaults. Add `[Screen:<name>]` sections to override popup
+settings for individual monitors. Names match `kscreen-doctor -o` exactly. For example:
+
+```ini
+[General]
+mode=all-secondary
+position=bottom-right
+width=332
+lifetime_ms=5000
+
+[Screen:HDMI-A-1]
+position=bottom-left
+left_margin=40
+bottom_margin=88
+width=400
+lifetime_ms=8000
+max_notifications=6
+background_opacity=90
+gap=18
+
+[Screen:DP-2]
+position=top-right
+top_margin=32
+right_margin=24
+width=300
+max_notifications=3
+
+[Screen:DP-3]
+enabled=false
+```
+
+Every popup option below, plus `enabled`, can be set per screen. Omitted keys inherit
+`[General]`; screens without a section use those defaults. `mode` and `screens` are
+only global selection options. A screen section customizes a selected screen; it does
+not override `mode=screens` or `mode=secondary` selection. `enabled=false` excludes
+a screen; `enabled=true` in a screen section can override a global `enabled=false`.
+
+Each screen has its own stack, popup limit, countdowns, and local dismissals. Application
+actions and daemon-side close events still apply to all copies of that notification.
+Screen settings follow the connector name after reconnecting and apply only while the
+screen is non-primary. Changing the primary screen removes its mirrored popups;
+newly selected secondary screens show future notifications only.
+
+Restart the service after editing the configuration file:
+
+```bash
+systemctl --user restart plasma-notification-mirror.service
 ```
 
 ### Popup position
@@ -233,7 +289,7 @@ Defaults:
 ```ini
 [General]
 
-mode=secondary
+mode=all-secondary
 screens=
 
 position=bottom-right
@@ -260,6 +316,7 @@ ctest --test-dir build --output-on-failure
 ```
 
 Tests cover RGB/RGBA image payloads, deprecated image hints, malformed image buffers,
+per-screen inheritance and isolation, primary exclusion, disabled and unavailable screens,
 file and desktop-entry icons, application/content icon separation and duplicate suppression,
 icon lookup without a desktop platform plugin, default action invocation, duplicate clicks, resident
 notifications, and action errors. The isolated session does not use your desktop's
@@ -292,10 +349,13 @@ notify-send --wait --action=default=Open -i dialog-information \
 that already provides clickable notifications, such as a chat client. A plain
 `notify-send` without `--action` has no default click behavior.
 
-To check hotplug, start with one display in the default `secondary` mode, connect a
+To check hotplug, start with one display in the default `all-secondary` mode, connect a
 second display, and send a new notification. Unplug it while a popup is visible,
 then reconnect it and send another notification. Also test switching the primary
 display and the configured `screens` mode. The process should stay running throughout.
+With multiple secondary displays, configure different widths, corners, lifetimes,
+and popup limits, then verify that each uses its own settings. Disable one with
+`enabled=false` and restart; it should receive no mirrored popups.
 
 Check the service:
 

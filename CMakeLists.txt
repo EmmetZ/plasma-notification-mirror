@@ -13,6 +13,7 @@ pkg_check_modules(LIBSYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 
 add_library(notification-support STATIC
     src/notification.cpp
+    src/config.cpp
     src/notificationactions.cpp
 )
 target_include_directories(notification-support PUBLIC src)
@@ -33,6 +34,10 @@ if(BUILD_TESTING)
     add_executable(notification-tests tests/notification_test.cpp)
     set_target_properties(notification-tests PROPERTIES AUTOMOC ON)
     target_link_libraries(notification-tests PRIVATE notification-support Qt6::Test)
+    add_executable(config-tests tests/config_test.cpp)
+    set_target_properties(config-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(config-tests PRIVATE notification-support Qt6::Test)
+    add_test(NAME config-tests COMMAND config-tests)
     add_test(NAME notification-tests
         COMMAND dbus-run-session -- $<TARGET_FILE:notification-tests>)
     set_tests_properties(notification-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

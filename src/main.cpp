@@ -1,3 +1,4 @@
+#include "config.h"
 #include "notification.h"
 #include "notificationactions.h"
 
@@ -5,7 +6,6 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QEvent>
-#include <QFileInfo>
 #include <QFontMetrics>
 #include <QGuiApplication>
 #include <QIcon>
@@ -17,8 +17,6 @@
 #include <QSurfaceFormat>
 #include <QSocketNotifier>
 #include <QHash>
-#include <QSettings>
-#include <QStandardPaths>
 #include <QTimer>
 #include <QWindow>
 
@@ -30,151 +28,20 @@
 #include <systemd/sd-bus.h>
 #include <unistd.h>
 
-struct AppConfig
-{
-    QString mode = QStringLiteral("secondary");
-    QStringList screens;
-    QString position = QStringLiteral("bottom-right");
-    int lifetimeMs = 5000;
-    int width = 332;
-    int maxNotifications = 5;
-    int backgroundOpacity = 100;
-    int leftMargin = 18;
-    int rightMargin = 18;
-    int topMargin = 18;
-    int bottomMargin = 58;
-    int gap = 12;
-};
-
-static AppConfig loadConfig()
-{
-    AppConfig config;
-
-    QString configPath =
-        qEnvironmentVariable("PLASMA_NOTIFICATION_MIRROR_CONFIG").trimmed();
-
-    if (configPath.isEmpty()) {
-        const QString configDir =
-            QStandardPaths::writableLocation(QStandardPaths::ConfigLocation)
-            + QStringLiteral("/plasma-notification-mirror");
-        configPath = configDir + QStringLiteral("/config.ini");
-    } else {
-        qInfo() << "Using config override:" << configPath;
-    }
-
-    if (!QFileInfo::exists(configPath)) {
-        qInfo() << "No config file found; using zero-configuration defaults:" << configPath;
-        return config;
-    }
-
-    QSettings settings(configPath, QSettings::IniFormat);
-
-    config.mode = settings.value(QStringLiteral("mode"), config.mode).toString().trimmed().toLower();
-    config.screens = settings.value(QStringLiteral("screens"), QString()).toString().split(',', Qt::SkipEmptyParts);
-    for (QString &screen : config.screens)
-        screen = screen.trimmed();
-
-    config.position =
-        settings.value(QStringLiteral("position"), config.position)
-            .toString()
-            .trimmed()
-            .toLower();
-
-    const QStringList validPositions = {
-        QStringLiteral("top-left"),
-        QStringLiteral("top-right"),
-        QStringLiteral("bottom-left"),
-        QStringLiteral("bottom-right")
-    };
-
-    if (!validPositions.contains(config.position)) {
-        qWarning() << "Unknown position" << config.position
-                   << "; using 'bottom-right'.";
-        config.position = QStringLiteral("bottom-right");
-    }
-
-    config.lifetimeMs = qBound(500, settings.value(QStringLiteral("lifetime_ms"), config.lifetimeMs).toInt(), 60000);
-    config.width = qBound(220, settings.value(QStringLiteral("width"), config.width).toInt(), 900);
-    config.maxNotifications = qBound(1, settings.value(QStringLiteral("max_notifications"), config.maxNotifications).toInt(), 20);
-    config.backgroundOpacity =
-        qBound(0,
-               settings.value(QStringLiteral("background_opacity"),
-                              config.backgroundOpacity).toInt(),
-               100);
-
-    config.leftMargin =
-        qMax(0, settings.value(QStringLiteral("left_margin"), config.leftMargin).toInt());
-    config.rightMargin =
-        qMax(0, settings.value(QStringLiteral("right_margin"), config.rightMargin).toInt());
-    config.topMargin =
-        qMax(0, settings.value(QStringLiteral("top_margin"), config.topMargin).toInt());
-    config.bottomMargin =
-        qMax(0, settings.value(QStringLiteral("bottom_margin"), config.bottomMargin).toInt());
-
-    config.gap = qBound(0, settings.value(QStringLiteral("gap"), config.gap).toInt(), 100);
-
-    qInfo() << "Popup position:" << config.position;
-    qInfo() << "Margins:"
-            << "left=" << config.leftMargin
-            << "right=" << config.rightMargin
-            << "top=" << config.topMargin
-            << "bottom=" << config.bottomMargin;
-
-    return config;
-}
-
 static QList<QScreen *> selectTargetScreens(const AppConfig &config)
 {
-    const QList<QScreen *> allScreens = QGuiApplication::screens();
-    QScreen *primary = QGuiApplication::primaryScreen();
-    QList<QScreen *> targets;
-
-    auto addFirstSecondary = [&]() {
-        for (QScreen *screen : allScreens) {
-            if (screen != primary) {
-                targets.append(screen);
-                return;
-            }
-        }
-    };
-
-    if (config.mode == QStringLiteral("primary")) {
-        if (primary)
-            targets.append(primary);
-    } else if (config.mode == QStringLiteral("all")) {
-        targets = allScreens;
-    } else if (config.mode == QStringLiteral("all-secondary")) {
-        for (QScreen *screen : allScreens) {
-            if (screen != primary)
-                targets.append(screen);
-        }
-    } else if (config.mode == QStringLiteral("screens")) {
-        for (const QString &wanted : config.screens) {
-            auto it = std::find_if(allScreens.cbegin(), allScreens.cend(), [&](QScreen *screen) {
-                return screen->name() == wanted;
-            });
-            if (it != allScreens.cend())
-                targets.append(*it);
-            else
-                qWarning() << "Configured monitor was not found:" << wanted;
-        }
-
-        if (targets.isEmpty()) {
-            qWarning() << "No configured monitors were available; falling back to the first secondary monitor.";
-            addFirstSecondary();
-        }
-    } else {
-        if (config.mode != QStringLiteral("secondary"))
-            qWarning() << "Unknown mode" << config.mode << "; using 'secondary'.";
-        addFirstSecondary();
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    QStringList names;
+    for (QScreen *screen : screens)
+        names.append(screen->name());
+    const QScreen *primary = QGuiApplication::primaryScreen();
+    const QStringList targets = selectTargetScreenNames(config, names, primary ? primary->name() : QString());
+    QList<QScreen *> result;
+    for (QScreen *screen : screens) {
+        if (targets.contains(screen->name()))
+            result.append(screen);
     }
-
-    QList<QScreen *> uniqueTargets;
-    for (QScreen *screen : targets) {
-        if (!uniqueTargets.contains(screen))
-            uniqueTargets.append(screen);
-    }
-    return uniqueTargets;
+    return result;
 }
 
 static int calculatePopupHeight(const NotificationData &data, int popupWidth)
@@ -223,7 +90,7 @@ public:
         QScreen *screen,
         int stackMargin,
         const NotificationData &data,
-        const AppConfig &config,
+        const PopupConfig &config,
         std::function<void(NotificationOverlay *)> onClose,
         std::function<void(const NotificationData &)> onActivate)
         : backingStore(this),
@@ -401,7 +268,7 @@ private:
     QElapsedTimer runElapsed;
     LayerShellQt::Window *layerWindow = nullptr;
     NotificationData notification;
-    AppConfig config;
+    PopupConfig config;
     NotificationIcons notificationIcons;
     std::function<void(NotificationOverlay *)> onClose;
     std::function<void(const NotificationData &)> onActivate;
@@ -565,7 +432,7 @@ private:
 class OverlayManager : public QObject
 {
 public:
-    OverlayManager(QScreen *screen, const AppConfig &config,
+    OverlayManager(QScreen *screen, const PopupConfig &config,
                    NotificationActions *actions, QObject *parent = nullptr)
         : QObject(parent), screen(screen), config(config), actions(actions)
     {
@@ -632,7 +499,7 @@ public:
 
 private:
     QPointer<QScreen> screen;
-    AppConfig config;
+    PopupConfig config;
     NotificationActions *actions;
     QList<NotificationData> notifications;
     QList<NotificationOverlay *> overlays;
@@ -720,7 +587,8 @@ public:
             delete screenManagers.take(screen);
             updateTimer.start();
         });
-        connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, [this]() {
+        connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, [this](QScreen *primary) {
+            delete screenManagers.take(primary);
             updateTimer.start();
         });
         for (QScreen *screen : QGuiApplication::screens())
@@ -754,7 +622,7 @@ private:
         for (QScreen *screen : targets) {
             if (!screenManagers.contains(screen)) {
                 qInfo() << "Mirror monitor:" << screen->name();
-                screenManagers.insert(screen, new OverlayManager(screen, config, actions, this));
+                screenManagers.insert(screen, new OverlayManager(screen, config.popupForScreen(screen->name()), actions, this));
             } else {
                 screenManagers.value(screen)->refreshLayout();
             }
