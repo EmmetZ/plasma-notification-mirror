@@ -148,6 +148,72 @@ private slots:
         QCOMPARE(selectTargetScreenNames(config, {"eDP-1", "DP-1", "HDMI-A-1"}, "eDP-1"),
                  QStringList({"DP-1"}));
     }
+
+    void marginShorthand()
+    {
+        QTemporaryDir directory;
+        QFile file(directory.filePath(QStringLiteral("config.ini")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("[General]\nmargin=30\nleft_margin=40\nbottom_margin=60\n"
+                   "[Screen:HDMI-A-1]\nmargin=12\nright_margin=18\n"
+                   "[Screen:DP-1]\nposition=bottom-center\nbottom_margin=70\n"
+                   "[Screen:DP-2]\nmargin=invalid\n"
+                   "[Screen:DP-3]\nmargin=-10\n");
+        file.close();
+        const AppConfig config = loadConfig(file.fileName());
+        const PopupConfig hdmi = config.popupForScreen("HDMI-A-1");
+        QCOMPARE(hdmi.leftMargin, 12);
+        QCOMPARE(hdmi.rightMargin, 18);
+        QCOMPARE(hdmi.topMargin, 12);
+        QCOMPARE(hdmi.bottomMargin, 12);
+        const PopupConfig dp = config.popupForScreen("DP-1");
+        QCOMPARE(dp.position, QStringLiteral("bottom-center"));
+        QCOMPARE(dp.leftMargin, 40);
+        QCOMPARE(dp.rightMargin, 30);
+        QCOMPARE(dp.topMargin, 30);
+        QCOMPARE(dp.bottomMargin, 70);
+        QCOMPARE(config.popupForScreen("DP-2").bottomMargin, 60);
+        QCOMPARE(config.popupForScreen("DP-2").leftMargin, 40);
+        const PopupConfig zero = config.popupForScreen("DP-3");
+        QCOMPARE(zero.leftMargin, 0);
+        QCOMPARE(zero.rightMargin, 0);
+        QCOMPARE(zero.topMargin, 0);
+        QCOMPARE(zero.bottomMargin, 0);
+        QCOMPARE(config.defaults.leftMargin, 40);
+    }
+
+    void positions_data()
+    {
+        QTest::addColumn<QString>("input");
+        QTest::addColumn<QString>("canonical");
+        const QStringList positions = {"top-left", "top-center", "top-right", "center-left",
+                                       "center", "center-right", "bottom-left", "bottom-center", "bottom-right"};
+        for (const QString &position : positions)
+            QTest::newRow(qPrintable(position)) << position << position;
+        QTest::newRow("top-alias") << QString("top") << QString("top-center");
+        QTest::newRow("bottom-alias") << QString("bottom") << QString("bottom-center");
+        QTest::newRow("left-alias") << QString("left") << QString("center-left");
+        QTest::newRow("right-alias") << QString("right") << QString("center-right");
+        QTest::newRow("left-center-alias") << QString("left-center") << QString("center-left");
+        QTest::newRow("right-center-alias") << QString("right-center") << QString("center-right");
+        QTest::newRow("middle-left-alias") << QString("middle-left") << QString("center-left");
+        QTest::newRow("middle-right-alias") << QString("middle-right") << QString("center-right");
+        QTest::newRow("middle-alias") << QString("middle") << QString("center");
+        QTest::newRow("center-center-alias") << QString("center-center") << QString("center");
+        QTest::newRow("case-and-whitespace") << QString("  TOP-CENTER  ") << QString("top-center");
+    }
+
+    void positions()
+    {
+        QFETCH(QString, input);
+        QFETCH(QString, canonical);
+        QTemporaryDir directory;
+        QFile file(directory.filePath(QStringLiteral("config.ini")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("[General]\nposition=" + input.toUtf8() + "\n");
+        file.close();
+        QCOMPARE(loadConfig(file.fileName()).defaults.position, canonical);
+    }
 };
 
 QTEST_GUILESS_MAIN(ConfigTest)

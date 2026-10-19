@@ -1,6 +1,7 @@
 #include "config.h"
 #include "notification.h"
 #include "notificationactions.h"
+#include "popuplayout.h"
 
 #include <QBackingStore>
 #include <QDebug>
@@ -88,7 +89,7 @@ class NotificationOverlay : public QWindow
 public:
     NotificationOverlay(
         QScreen *screen,
-        int stackMargin,
+        const PopupPlacement &placement,
         const NotificationData &data,
         const PopupConfig &config,
         std::function<void(NotificationOverlay *)> onClose,
@@ -118,31 +119,18 @@ public:
 
         layerWindow = LayerShellQt::Window::get(this);
 
-        const bool anchorTop = config.position.startsWith(QStringLiteral("top-"));
-        const bool anchorLeft = config.position.endsWith(QStringLiteral("-left"));
-
         LayerShellQt::Window::Anchors anchors;
-        anchors.setFlag(
-            anchorTop
-                ? LayerShellQt::Window::AnchorTop
-                : LayerShellQt::Window::AnchorBottom);
-        anchors.setFlag(
-            anchorLeft
-                ? LayerShellQt::Window::AnchorLeft
-                : LayerShellQt::Window::AnchorRight);
-
+        anchors.setFlag(LayerShellQt::Window::AnchorTop, placement.anchors.testFlag(Qt::TopEdge));
+        anchors.setFlag(LayerShellQt::Window::AnchorBottom, placement.anchors.testFlag(Qt::BottomEdge));
+        anchors.setFlag(LayerShellQt::Window::AnchorLeft, placement.anchors.testFlag(Qt::LeftEdge));
+        anchors.setFlag(LayerShellQt::Window::AnchorRight, placement.anchors.testFlag(Qt::RightEdge));
         layerWindow->setAnchors(anchors);
         layerWindow->setLayer(LayerShellQt::Window::LayerTop);
         layerWindow->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
         layerWindow->setExclusiveZone(-1);
         layerWindow->setDesiredSize(QSize(config.width, popupHeight));
 
-        const int left = anchorLeft ? config.leftMargin : 0;
-        const int right = anchorLeft ? 0 : config.rightMargin;
-        const int top = anchorTop ? stackMargin : 0;
-        const int bottom = anchorTop ? 0 : stackMargin;
-
-        layerWindow->setMargins(QMargins(left, top, right, bottom));
+        layerWindow->setMargins(placement.margins);
 
         hideTimer.setSingleShot(true);
         QObject::connect(&hideTimer, &QTimer::timeout, this, [this]() { closeOverlay(); });
@@ -525,26 +513,22 @@ private:
             overlay->deleteLater();
         }
 
-        const bool stackFromTop =
-            config.position.startsWith(QStringLiteral("top-"));
-        const int baseMargin =
-            stackFromTop ? config.topMargin : config.bottomMargin;
+        QList<int> heights;
+        heights.reserve(notifications.size());
+        for (const NotificationData &data : notifications)
+            heights.append(calculatePopupHeight(data, config.width));
+        const QList<PopupPlacement> placements = popupPlacements(config, heights, screen->geometry().height());
 
-        int accumulatedHeight = 0;
         for (int i = 0; i < notifications.size(); ++i) {
-            const int stackMargin = baseMargin + accumulatedHeight;
             auto *overlay = new NotificationOverlay(
                 screen,
-                stackMargin,
+                placements.at(i),
                 notifications.at(i),
                 config,
                 [this](NotificationOverlay *item) { overlayClosed(item); },
                 [this](const NotificationData &data) { actions->invokeDefault(data); });
             overlays.append(overlay);
             overlay->showNotification();
-            accumulatedHeight +=
-                calculatePopupHeight(notifications.at(i), config.width)
-                + config.gap;
         }
 
         rebuilding = false;

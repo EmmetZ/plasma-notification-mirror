@@ -10,10 +10,26 @@ namespace {
 PopupConfig readPopupConfig(QSettings &settings, PopupConfig config)
 {
     config.enabled = settings.value(QStringLiteral("enabled"), config.enabled).toBool();
-    const QString position = settings.value(QStringLiteral("position"), config.position)
-                                 .toString().trimmed().toLower();
-    const QStringList validPositions = {QStringLiteral("top-left"), QStringLiteral("top-right"),
-                                       QStringLiteral("bottom-left"), QStringLiteral("bottom-right")};
+    QString position = settings.value(QStringLiteral("position"), config.position)
+                           .toString().trimmed().toLower();
+    const QHash<QString, QString> aliases = {
+        {QStringLiteral("top"), QStringLiteral("top-center")},
+        {QStringLiteral("bottom"), QStringLiteral("bottom-center")},
+        {QStringLiteral("left"), QStringLiteral("center-left")},
+        {QStringLiteral("right"), QStringLiteral("center-right")},
+        {QStringLiteral("left-center"), QStringLiteral("center-left")},
+        {QStringLiteral("right-center"), QStringLiteral("center-right")},
+        {QStringLiteral("middle-left"), QStringLiteral("center-left")},
+        {QStringLiteral("middle-right"), QStringLiteral("center-right")},
+        {QStringLiteral("middle"), QStringLiteral("center")},
+        {QStringLiteral("center-center"), QStringLiteral("center")}
+    };
+    position = aliases.value(position, position);
+    const QStringList validPositions = {
+        QStringLiteral("top-left"), QStringLiteral("top-center"), QStringLiteral("top-right"),
+        QStringLiteral("center-left"), QStringLiteral("center"), QStringLiteral("center-right"),
+        QStringLiteral("bottom-left"), QStringLiteral("bottom-center"), QStringLiteral("bottom-right")
+    };
     if (validPositions.contains(position))
         config.position = position;
     else
@@ -33,6 +49,17 @@ PopupConfig readPopupConfig(QSettings &settings, PopupConfig config)
     config.maxNotifications = number("max_notifications", config.maxNotifications, 1, 20);
     config.backgroundOpacity = number("background_opacity", config.backgroundOpacity, 0, 100);
     constexpr int maxMargin = std::numeric_limits<int>::max();
+    // Apply a section's shorthand before its edge overrides. A per-screen
+    // shorthand replaces inherited margins, then local edge keys take priority.
+    if (settings.contains(QStringLiteral("margin"))) {
+        bool ok = false;
+        const int margin = settings.value(QStringLiteral("margin")).toInt(&ok);
+        if (ok) {
+            config.leftMargin = config.rightMargin = config.topMargin = config.bottomMargin = qMax(0, margin);
+        } else {
+            qWarning() << "Invalid margin; keeping inherited edge margins.";
+        }
+    }
     config.leftMargin = number("left_margin", config.leftMargin, 0, maxMargin);
     config.rightMargin = number("right_margin", config.rightMargin, 0, maxMargin);
     config.topMargin = number("top_margin", config.topMargin, 0, maxMargin);

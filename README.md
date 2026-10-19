@@ -14,12 +14,9 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 
 - Zero-configuration default: mirrors to every non-primary monitor
 - Optional multi-monitor modes
-- Configurable popup corner:
-  - top-left
-  - top-right
-  - bottom-left
-  - bottom-right
-- Independent margins for all four screen edges
+- Nine popup positions, including edge centers and the screen center
+- Automatic horizontal centering and centered notification stacks
+- Optional common margin with independent edge overrides
 - Unrestricted margin offsets for large and high-resolution displays
 - Configurable popup background opacity
 - Independent per-screen popup settings and enable switches
@@ -174,8 +171,7 @@ width=332
 lifetime_ms=5000
 
 [Screen:HDMI-A-1]
-position=bottom-left
-left_margin=40
+position=bottom-center
 bottom_margin=88
 width=400
 lifetime_ms=8000
@@ -184,9 +180,8 @@ background_opacity=90
 gap=18
 
 [Screen:DP-2]
-position=top-right
-top_margin=32
-right_margin=24
+position=center-left
+margin=24
 width=300
 max_notifications=3
 
@@ -214,44 +209,69 @@ systemctl --user restart plasma-notification-mirror.service
 
 ### Popup position
 
+Choose one of nine positions in either `[General]` or a screen section:
+
+| Left | Center | Right |
+| --- | --- | --- |
+| `top-left` | `top-center` | `top-right` |
+| `center-left` | `center` | `center-right` |
+| `bottom-left` | `bottom-center` | `bottom-right` (default) |
+
+For example, bottom-center needs only a bottom margin:
+
 ```ini
-[General]
-position=bottom-right
+[Screen:HDMI-A-1]
+position=bottom-center
+bottom_margin=88
 ```
 
-Available values:
+Horizontal centering follows the output width automatically, including after changes
+to resolution, scaling, or popup width. Do not calculate `left_margin` yourself.
+Top positions stack downward; bottom positions stack upward. The middle row centers
+the entire notification stack vertically and arranges its cards from top to bottom.
+The group recenters when notifications are added, replaced, or dismissed. If a
+centered stack exceeds the screen height, it starts at the top of the screen.
 
-- `top-left`
-- `top-right`
-- `bottom-left`
-- `bottom-right` — default
+Short forms `top`, `bottom`, `left`, and `right` mean the corresponding edge center.
+`left-center` / `middle-left` and `right-center` / `middle-right` are also accepted;
+`middle` and `center-center` mean `center`.
 
-Notifications stack away from the selected corner. For example, notifications positioned at the top of the screen stack downward, while notifications positioned at the bottom stack upward.
+### Optional margins
 
-### Margins
+Every margin is optional. Without any margin keys, defaults remain 18 logical pixels
+on the left, right, and top, and 58 on the bottom. These distances are measured from
+the full screen edges, including the area occupied by panels.
 
-Each screen edge has its own margin:
-
-```ini
-[General]
-left_margin=18
-right_margin=18
-top_margin=18
-bottom_margin=58
-```
-
-Only the two margins relevant to the selected corner are used.
-
-For example:
+Use `margin` to set a common distance and add an individual edge only when needed:
 
 ```ini
 [General]
+margin=24
+bottom_margin=72
+
+[Screen:DP-2]
 position=top-right
-right_margin=24
-top_margin=32
+margin=32
 ```
 
-Margin values are not artificially capped, so large offsets can be used on high-resolution or unusual monitor layouts.
+Within each section, `margin` sets all four edges first, then `left_margin`,
+`right_margin`, `top_margin`, and `bottom_margin` override individual edges. A screen's
+`margin` replaces all inherited edge margins; a screen's individual edge key replaces
+only that edge. Omitted values inherit `[General]`.
+
+Only edges used by the selected position affect placement:
+
+| Position | Relevant margins |
+| --- | --- |
+| Four corners | The matching horizontal and vertical edge |
+| `top-center` / `bottom-center` | `top_margin` / `bottom_margin` only |
+| `center-left` / `center-right` | `left_margin` / `right_margin` only |
+| `center` | None |
+
+Centered axes ignore their edge margins. For example, `center-left` needs no top or
+bottom margins, and `center` needs no margins at all. Zero is valid; negative margins
+are clamped to zero. Existing configurations using only individual edge keys remain
+compatible, and large offsets remain supported.
 
 ### Background opacity
 
@@ -299,9 +319,7 @@ width=332
 max_notifications=5
 background_opacity=100
 
-left_margin=18
-right_margin=18
-top_margin=18
+margin=18
 bottom_margin=58
 
 gap=12
@@ -317,6 +335,7 @@ ctest --test-dir build --output-on-failure
 
 Tests cover RGB/RGBA image payloads, deprecated image hints, malformed image buffers,
 per-screen inheritance and isolation, primary exclusion, disabled and unavailable screens,
+all nine positions, centered stack reflow, and common/edge margin precedence,
 file and desktop-entry icons, application/content icon separation and duplicate suppression,
 icon lookup without a desktop platform plugin, default action invocation, duplicate clicks, resident
 notifications, and action errors. The isolated session does not use your desktop's
