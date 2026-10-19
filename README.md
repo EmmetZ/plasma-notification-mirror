@@ -15,6 +15,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 - Zero-configuration default: mirrors to every non-primary monitor
 - Optional multi-monitor modes
 - Nine popup positions, including edge centers and the screen center
+- Optional margin positioning mode preserving the original four-corner behavior
 - Automatic horizontal centering and centered notification stacks
 - Optional common margin with independent edge overrides
 - Unrestricted margin offsets for large and high-resolution displays
@@ -207,9 +208,38 @@ Restart the service after editing the configuration file:
 systemctl --user restart plasma-notification-mirror.service
 ```
 
+### Positioning mode
+
+`position_mode` can be set in `[General]` or overridden per screen:
+
+- `grid` (default): nine positions with automatic centering on centered axes.
+- `margin`: original four-corner placement, with both axes anchored to screen edges.
+  Popup placement is controlled by the matching horizontal and vertical margins.
+  No automatic centering is performed, even after resolution or popup width changes.
+
+For the original manual bottom-left placement:
+
+```ini
+[Screen:HDMI-A-1]
+position_mode=margin
+position=bottom-left
+left_margin=1118
+bottom_margin=88
+```
+
+Margin mode accepts `top-left`, `top-right`, `bottom-left`, and `bottom-right`.
+Set a corner explicitly when changing from a centered grid position. An unsupported
+position is logged and falls back to the inherited corner, or `bottom-right` if the
+inherited position is also incompatible. Margins, gap, lifetime, and other popup
+settings retain the same per-screen inheritance rules. The `margin` shorthand and
+individual edge overrides work in both modes.
+
+Choose `position_mode=grid` on another screen to keep automatic centering there.
+The global monitor-selection `mode` is independent of `position_mode`.
+
 ### Popup position
 
-Choose one of nine positions in either `[General]` or a screen section:
+In `position_mode=grid`, choose one of nine positions in either `[General]` or a screen section:
 
 | Left | Center | Right |
 | --- | --- | --- |
@@ -268,7 +298,7 @@ Only edges used by the selected position affect placement:
 | `center-left` / `center-right` | `left_margin` / `right_margin` only |
 | `center` | None |
 
-Centered axes ignore their edge margins. For example, `center-left` needs no top or
+In grid mode, centered axes ignore their edge margins. For example, `center-left` needs no top or
 bottom margins, and `center` needs no margins at all. Zero is valid; negative margins
 are clamped to zero. Existing configurations using only individual edge keys remain
 compatible, and large offsets remain supported.
@@ -335,7 +365,8 @@ ctest --test-dir build --output-on-failure
 
 Tests cover RGB/RGBA image payloads, deprecated image hints, malformed image buffers,
 per-screen inheritance and isolation, primary exclusion, disabled and unavailable screens,
-all nine positions, centered stack reflow, and common/edge margin precedence,
+all nine positions, centered stack reflow, margin-mode compatibility and inheritance,
+and common/edge margin precedence,
 file and desktop-entry icons, application/content icon separation and duplicate suppression,
 icon lookup without a desktop platform plugin, default action invocation, duplicate clicks, resident
 notifications, and action errors. The isolated session does not use your desktop's

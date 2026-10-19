@@ -6,6 +6,7 @@
 struct PopupConfig
 {
     bool enabled = true;
+    QString positionMode = QStringLiteral("grid");
     QString position = QStringLiteral("bottom-right");
     int lifetimeMs = 5000;
     int width = 332;

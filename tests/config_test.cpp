@@ -13,6 +13,7 @@ private slots:
         QTemporaryDir directory;
         const AppConfig config = loadConfig(directory.filePath(QStringLiteral("missing.ini")));
         QCOMPARE(config.mode, QStringLiteral("all-secondary"));
+        QCOMPARE(config.defaults.positionMode, QStringLiteral("grid"));
         QCOMPARE(config.popupForScreen(QStringLiteral("DP-1")).width, 332);
         QCOMPARE(selectTargetScreenNames(config, {"eDP-1", "DP-1", "HDMI-A-1"}, "eDP-1"),
                  QStringList({"DP-1", "HDMI-A-1"}));
@@ -213,6 +214,53 @@ private slots:
         file.write("[General]\nposition=" + input.toUtf8() + "\n");
         file.close();
         QCOMPARE(loadConfig(file.fileName()).defaults.position, canonical);
+    }
+
+    void positionModes_data()
+    {
+        QTest::addColumn<QByteArray>("ini");
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<QString>("position");
+        QTest::newRow("margin-global-inherited")
+            << QByteArray("[General]\nposition_mode=margin\nposition=top-left\n[Screen:DP-1]\nleft_margin=1118\n")
+            << QString("margin") << QString("top-left");
+        QTest::newRow("margin-per-screen")
+            << QByteArray("[General]\nposition=bottom-center\n[Screen:DP-1]\nposition_mode=margin\nposition=bottom-left\n")
+            << QString("margin") << QString("bottom-left");
+        QTest::newRow("grid-per-screen")
+            << QByteArray("[General]\nposition_mode=margin\n[Screen:DP-1]\nposition_mode=grid\nposition=center\n")
+            << QString("grid") << QString("center");
+        QTest::newRow("center-rejected-in-margin")
+            << QByteArray("[General]\nposition_mode=margin\nposition=top-left\n[Screen:DP-1]\nposition=center\n")
+            << QString("margin") << QString("top-left");
+        QTest::newRow("center-inherited-when-switching")
+            << QByteArray("[General]\nposition=bottom-center\n[Screen:DP-1]\nposition_mode=margin\n")
+            << QString("margin") << QString("bottom-right");
+        QTest::newRow("invalid-mode-keeps-inherited")
+            << QByteArray("[General]\nposition_mode=margin\n[Screen:DP-1]\nposition_mode=invalid\nposition=bottom-left\n")
+            << QString("margin") << QString("bottom-left");
+        QTest::newRow("case-and-whitespace")
+            << QByteArray("[General]\n[Screen:DP-1]\nposition_mode= MARGIN \nposition= TOP-RIGHT \n")
+            << QString("margin") << QString("top-right");
+    }
+
+    void positionModes()
+    {
+        QFETCH(QByteArray, ini);
+        QFETCH(QString, mode);
+        QFETCH(QString, position);
+        QTemporaryDir directory;
+        QFile file(directory.filePath(QStringLiteral("config.ini")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(ini);
+        file.close();
+        const AppConfig config = loadConfig(file.fileName());
+        const PopupConfig popup = config.popupForScreen("DP-1");
+        QCOMPARE(popup.positionMode, mode);
+        QCOMPARE(popup.position, position);
+        // Local mode/position overrides do not alter other screens' defaults.
+        QCOMPARE(config.popupForScreen("other").positionMode, config.defaults.positionMode);
+        QCOMPARE(config.popupForScreen("other").position, config.defaults.position);
     }
 };
 

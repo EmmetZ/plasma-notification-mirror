@@ -76,6 +76,48 @@ private slots:
         QVERIFY(!placements[0].anchors.testFlag(Qt::RightEdge));
     }
 
+    void marginMode_data()
+    {
+        QTest::addColumn<QString>("corner");
+        QTest::addColumn<int>("anchors");
+        QTest::addColumn<QMargins>("first");
+        QTest::addColumn<QMargins>("second");
+        QTest::newRow("top-left") << QString("top-left") << int(Qt::TopEdge | Qt::LeftEdge)
+            << QMargins(1118, 32, 0, 0) << QMargins(1118, 132, 0, 0);
+        QTest::newRow("top-right") << QString("top-right") << int(Qt::TopEdge | Qt::RightEdge)
+            << QMargins(0, 32, 600, 0) << QMargins(0, 132, 600, 0);
+        QTest::newRow("bottom-left") << QString("bottom-left") << int(Qt::BottomEdge | Qt::LeftEdge)
+            << QMargins(1118, 0, 0, 88) << QMargins(1118, 0, 0, 188);
+        QTest::newRow("bottom-right") << QString("bottom-right") << int(Qt::BottomEdge | Qt::RightEdge)
+            << QMargins(0, 0, 600, 88) << QMargins(0, 0, 600, 188);
+    }
+
+    void marginMode()
+    {
+        QFETCH(QString, corner);
+        QFETCH(int, anchors);
+        QFETCH(QMargins, first);
+        QFETCH(QMargins, second);
+        PopupConfig config;
+        config.positionMode = "margin";
+        config.position = corner;
+        config.leftMargin = 1118;
+        config.rightMargin = 600;
+        config.topMargin = 32;
+        config.bottomMargin = 88;
+        config.gap = 20;
+        auto placements = popupPlacements(config, {80, 120}, 1080);
+        QCOMPARE(int(placements[0].anchors), anchors);
+        QCOMPARE(int(placements[1].anchors), anchors);
+        QCOMPARE(placements[0].margins, first);
+        QCOMPARE(placements[1].margins, second);
+        // Manual placement does not recenter after screen/popup dimensions change.
+        config.width = 700;
+        placements = popupPlacements(config, {80, 120}, 2160);
+        QCOMPARE(placements[0].margins, first);
+        QCOMPARE(placements[1].margins, second);
+    }
+
     void emptyOverflowAndLargeMargins()
     {
         PopupConfig config;

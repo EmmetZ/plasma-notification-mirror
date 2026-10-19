@@ -10,6 +10,12 @@ namespace {
 PopupConfig readPopupConfig(QSettings &settings, PopupConfig config)
 {
     config.enabled = settings.value(QStringLiteral("enabled"), config.enabled).toBool();
+    const QString positionMode = settings.value(QStringLiteral("position_mode"), config.positionMode)
+                                     .toString().trimmed().toLower();
+    if (positionMode == QStringLiteral("grid") || positionMode == QStringLiteral("margin"))
+        config.positionMode = positionMode;
+    else
+        qWarning() << "Unknown position_mode" << positionMode << "; keeping" << config.positionMode;
     QString position = settings.value(QStringLiteral("position"), config.position)
                            .toString().trimmed().toLower();
     const QHash<QString, QString> aliases = {
@@ -25,15 +31,26 @@ PopupConfig readPopupConfig(QSettings &settings, PopupConfig config)
         {QStringLiteral("center-center"), QStringLiteral("center")}
     };
     position = aliases.value(position, position);
-    const QStringList validPositions = {
+    const QStringList corners = {
+        QStringLiteral("top-left"), QStringLiteral("top-right"),
+        QStringLiteral("bottom-left"), QStringLiteral("bottom-right")
+    };
+    const QStringList gridPositions = {
         QStringLiteral("top-left"), QStringLiteral("top-center"), QStringLiteral("top-right"),
         QStringLiteral("center-left"), QStringLiteral("center"), QStringLiteral("center-right"),
         QStringLiteral("bottom-left"), QStringLiteral("bottom-center"), QStringLiteral("bottom-right")
     };
+    const QStringList &validPositions = config.positionMode == QStringLiteral("margin") ? corners : gridPositions;
     if (validPositions.contains(position))
         config.position = position;
-    else
-        qWarning() << "Unknown position" << position << "; keeping" << config.position;
+    else {
+        // Switching from an inherited centered grid position to margin mode
+        // needs a usable corner even when no local position was supplied.
+        if (!validPositions.contains(config.position))
+            config.position = QStringLiteral("bottom-right");
+        qWarning() << "Unsupported position" << position << "in" << config.positionMode
+                   << "mode; using" << config.position;
+    }
 
     auto number = [&settings](const char *key, int fallback, int minimum, int maximum) {
         bool ok = false;

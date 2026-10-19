@@ -5,11 +5,15 @@
 QList<PopupPlacement> popupPlacements(const PopupConfig &config,
                                     const QList<int> &heights, int screenHeight)
 {
-    const bool bottom = config.position.startsWith(QStringLiteral("bottom-"));
-    const bool centerRow = config.position == QStringLiteral("center")
-        || config.position.startsWith(QStringLiteral("center-"));
+    const bool forceMargins = config.positionMode == QStringLiteral("margin");
+    // Margin mode follows the original four-corner rule: always anchor both
+    // axes and use edge distances, without any automatic centering.
+    const bool bottom = forceMargins ? !config.position.startsWith(QStringLiteral("top-"))
+                                    : config.position.startsWith(QStringLiteral("bottom-"));
+    const bool centerRow = !forceMargins && (config.position == QStringLiteral("center")
+        || config.position.startsWith(QStringLiteral("center-")));
     const bool left = config.position.endsWith(QStringLiteral("-left"));
-    const bool right = config.position.endsWith(QStringLiteral("-right"));
+    const bool right = forceMargins ? !left : config.position.endsWith(QStringLiteral("-right"));
 
     qint64 totalHeight = 0;
     for (int height : heights)
