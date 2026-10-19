@@ -31,6 +31,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 - Existing notifications compact when one is dismissed
 - Icons from raw `image-data` / `image_data` / `icon_data`, image paths, application icons, desktop entries, and icon themes
 - Click a mirrored notification to invoke the application-provided default action through Plasma
+- Automatic monitor reselection after hotplug and primary-monitor changes; waits when no target is available
 - Typed D-Bus monitoring: notifications are mirrored only after the notification daemon accepts them and returns their notification ID
 - Handles notification replacement and `NotificationClosed` events
 - Configurable width, lifetime, stack gap, and maximum popup count
@@ -136,6 +137,18 @@ Example for selected monitors:
 mode=screens
 screens=DP-2,DP-3
 ```
+
+Monitor selection is updated automatically when a display is connected or disconnected,
+when the primary display changes, and when screen geometry or DPI changes. No service
+restart is needed. In `secondary` / `all-secondary` mode, a single-monitor session has
+no mirror target: the process stays running and resumes mirroring future notifications
+when a secondary display becomes available. Plasma's original notifications continue
+normally.
+
+In `screens` mode, unavailable configured displays are skipped. If none are available,
+the first secondary display is used, as at startup. When a configured display returns,
+it is selected again. Popups belonging to removed targets are discarded; old notifications
+are not replayed onto newly connected targets.
 
 Monitor names can be viewed with:
 
@@ -278,6 +291,11 @@ notify-send --wait --action=default=Open -i dialog-information \
 `notify-send` prints the action key. Test opening a real window with an application
 that already provides clickable notifications, such as a chat client. A plain
 `notify-send` without `--action` has no default click behavior.
+
+To check hotplug, start with one display in the default `secondary` mode, connect a
+second display, and send a new notification. Unplug it while a popup is visible,
+then reconnect it and send another notification. Also test switching the primary
+display and the configured `screens` mode. The process should stay running throughout.
 
 Check the service:
 

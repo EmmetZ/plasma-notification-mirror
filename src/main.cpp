@@ -12,6 +12,7 @@
 #include <QList>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QScreen>
 #include <QSurfaceFormat>
 #include <QSocketNotifier>
@@ -570,6 +571,20 @@ public:
     {
     }
 
+    ~OverlayManager() override
+    {
+        for (NotificationOverlay *overlay : overlays) {
+            overlay->detachAndHide();
+            delete overlay;
+        }
+    }
+
+    void refreshLayout()
+    {
+        syncRemainingTimes();
+        rebuildOverlays();
+    }
+
     void upsertNotification(const NotificationData &incoming)
     {
         syncRemainingTimes();
@@ -616,7 +631,7 @@ public:
     }
 
 private:
-    QScreen *screen;
+    QPointer<QScreen> screen;
     AppConfig config;
     NotificationActions *actions;
     QList<NotificationData> notifications;
@@ -632,7 +647,7 @@ private:
 
     void rebuildOverlays()
     {
-        if (rebuilding)
+        if (rebuilding || !screen)
             return;
         rebuilding = true;
 
@@ -686,6 +701,69 @@ private:
     }
 };
 
+class TargetScreenManager : public QObject
+{
+public:
+    TargetScreenManager(const AppConfig &config, NotificationActions *actions, QObject *parent = nullptr)
+        : QObject(parent), config(config), actions(actions)
+    {
+        updateTimer.setSingleShot(true);
+        updateTimer.setInterval(100);
+        connect(&updateTimer, &QTimer::timeout, this, [this]() { updateScreens(); });
+        connect(qGuiApp, &QGuiApplication::screenAdded, this, [this](QScreen *screen) {
+            watchScreen(screen);
+            updateTimer.start();
+        });
+        connect(qGuiApp, &QGuiApplication::screenRemoved, this, [this](QScreen *screen) {
+            // Destroy layer surfaces during screenRemoved, before Qt moves
+            // orphaned windows onto another output.
+            delete screenManagers.take(screen);
+            updateTimer.start();
+        });
+        connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, [this]() {
+            updateTimer.start();
+        });
+        for (QScreen *screen : QGuiApplication::screens())
+            watchScreen(screen);
+        updateScreens();
+    }
+
+    QList<OverlayManager *> managers() const { return screenManagers.values(); }
+
+private:
+    AppConfig config;
+    NotificationActions *actions;
+    QHash<QScreen *, OverlayManager *> screenManagers;
+    QTimer updateTimer;
+
+    void watchScreen(QScreen *screen)
+    {
+        auto refresh = [this]() { updateTimer.start(); };
+        connect(screen, &QScreen::geometryChanged, this, refresh);
+        connect(screen, &QScreen::availableGeometryChanged, this, refresh);
+        connect(screen, &QScreen::logicalDotsPerInchChanged, this, refresh);
+    }
+
+    void updateScreens()
+    {
+        const QList<QScreen *> targets = selectTargetScreens(config);
+        for (QScreen *screen : screenManagers.keys()) {
+            if (!targets.contains(screen))
+                delete screenManagers.take(screen);
+        }
+        for (QScreen *screen : targets) {
+            if (!screenManagers.contains(screen)) {
+                qInfo() << "Mirror monitor:" << screen->name();
+                screenManagers.insert(screen, new OverlayManager(screen, config, actions, this));
+            } else {
+                screenManagers.value(screen)->refreshLayout();
+            }
+        }
+        if (targets.isEmpty())
+            qInfo() << "No target monitors available; waiting for a display change.";
+    }
+};
+
 struct PendingNotify
 {
     NotificationData data;
@@ -694,8 +772,8 @@ struct PendingNotify
 class NotificationBusMonitor : public QObject
 {
 public:
-    explicit NotificationBusMonitor(const QList<OverlayManager *> &managers, QObject *parent = nullptr)
-        : QObject(parent), managers(managers)
+    explicit NotificationBusMonitor(TargetScreenManager &screens, QObject *parent = nullptr)
+        : QObject(parent), screens(screens)
     {
     }
 
@@ -762,7 +840,7 @@ public:
     }
 
 private:
-    QList<OverlayManager *> managers;
+    TargetScreenManager &screens;
     QHash<QString, PendingNotify> pendingCalls;
     sd_bus *bus = nullptr;
     QSocketNotifier *notifier = nullptr;
@@ -924,7 +1002,7 @@ private:
         pendingCalls.erase(it);
         resolveSenderDesktopEntry(data, QString::fromUtf8(destination ? destination : ""));
 
-        for (OverlayManager *manager : managers)
+        for (OverlayManager *manager : screens.managers())
             manager->upsertNotification(data);
     }
 
@@ -948,7 +1026,7 @@ private:
         if (sd_bus_message_read(message, "uu", &notificationId, &reason) < 0)
             return;
 
-        for (OverlayManager *manager : managers)
+        for (OverlayManager *manager : screens.managers())
             manager->closeNotification(notificationId);
     }
 };
@@ -958,30 +1036,20 @@ int main(int argc, char **argv)
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("plasma-notification-mirror"));
 
+    app.setQuitOnLastWindowClosed(false);
     initializeIconTheme();
     const AppConfig config = loadConfig();
-    const QList<QScreen *> targets = selectTargetScreens(config);
-
-    if (targets.isEmpty()) {
-        qCritical() << "No target monitors are available.";
-        return 1;
-    }
-
-    qInfo() << "Primary monitor:" << QGuiApplication::primaryScreen()->name();
+    qInfo() << "Primary monitor:"
+            << (QGuiApplication::primaryScreen() ? QGuiApplication::primaryScreen()->name() : QString());
     qInfo() << "Mirror mode:" << config.mode;
 
     NotificationActions actions;
-    QList<OverlayManager *> managers;
-    for (QScreen *screen : targets) {
-        qInfo() << "Mirror monitor:" << screen->name();
-        managers.append(new OverlayManager(screen, config, &actions, &app));
-    }
-
-    actions.onInvoked = [&managers](quint32 id) {
-        for (OverlayManager *manager : managers)
+    TargetScreenManager screens(config, &actions);
+    actions.onInvoked = [&screens](quint32 id) {
+        for (OverlayManager *manager : screens.managers())
             manager->closeNotification(id);
     };
-    NotificationBusMonitor monitor(managers, &app);
+    NotificationBusMonitor monitor(screens, &app);
     if (!monitor.start())
         return 1;
 
