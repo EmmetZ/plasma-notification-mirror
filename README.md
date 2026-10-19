@@ -29,7 +29,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 - Countdown pauses while the pointer is over a popup
 - Manual close button
 - Existing notifications compact when one is dismissed
-- Application icon support via `app_icon`, `image-path` / `image_path`, and `desktop-entry` fallbacks
+- Icons from raw `image-data` / `image_data` / `icon_data`, image paths, application icons, desktop entries, and icon themes
 - Typed D-Bus monitoring: notifications are mirrored only after the notification daemon accepts them and returns their notification ID
 - Handles notification replacement and `NotificationClosed` events
 - Configurable width, lifetime, stack gap, and maximum popup count
@@ -39,8 +39,9 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 ## Requirements
 
 - KDE Plasma on Wayland
-- Qt 6
+- Qt 6 (Core, Gui, DBus; Qt SVG plugin for SVG icons)
 - `layer-shell-qt`
+- KDE Frameworks 6 `KService`
 - CMake
 - `libsystemd` / sd-bus
 - `pkgconf`
@@ -48,7 +49,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 ### Arch Linux / CachyOS
 
 ```bash
-sudo pacman -S --needed cmake qt6-base layer-shell-qt systemd-libs pkgconf
+sudo pacman -S --needed cmake qt6-base qt6-svg kservice layer-shell-qt systemd-libs pkgconf
 ```
 
 ## Build
@@ -238,6 +239,17 @@ gap=12
 
 ## Testing
 
+Run automated tests in an isolated D-Bus session (requires Qt Test and `dbus-run-session`):
+
+```bash
+ctest --test-dir build --output-on-failure
+```
+
+Tests cover RGB/RGBA image payloads, deprecated image hints, malformed image buffers,
+file and desktop-entry icons, application/content icon separation and duplicate suppression,
+and icon lookup without a desktop platform plugin. The isolated session does not use your desktop's
+notification service. Tests can be omitted at configure time with `-DBUILD_TESTING=OFF`.
+
 Send a test notification:
 
 ```bash
@@ -348,15 +360,24 @@ It does not attempt to duplicate:
 
 It does track daemon-side notification replacement and close events so mirrored popups remain aligned with the notification service.
 
-Some applications provide icons differently. The program currently tries:
+Application and notification icons follow Plasma's separate roles: a small application
+icon appears beside the application name in the header, while an optional content icon
+or image appears on the right of the notification body. Identical named icons are not
+shown twice. A plain `notify-send -i dialog-information` therefore has a right-hand
+information icon, while an application such as Spectacle has its application icon in
+the header.
 
-- the standard `app_icon` field
-- `image-path`
-- `image_path`
-- `desktop-entry`
-- icon-theme fallbacks
+Application icons use KDE's KService desktop-file lookup and KDE notification configuration
+(`x-kde-appname`). Missing Flatpak application identities are resolved from the sender's
+`.flatpak-info`, with exact desktop name/display name/WM class matching as a fallback.
+System and Flatpak icon export directories are included even when a systemd service
+starts without a desktop platform theme plugin. The selected KDE icon theme is read
+from KDE settings, with Breeze as a fallback; install `qt6-svg` for SVG-based themes.
 
-Raw `image-data` pixel payloads are not decoded yet.
+The reference implementation is Plasma 6.8.0's
+[NotificationHeader.qml](https://github.com/KDE/plasma-workspace/blob/v6.8.0/applets/notifications/components/NotificationHeader.qml),
+[DelegatePopup.qml](https://github.com/KDE/plasma-workspace/blob/v6.8.0/applets/notifications/delegates/DelegatePopup.qml),
+and [notification.cpp / server_p.cpp](https://github.com/KDE/plasma-workspace/tree/v6.8.0/libnotificationmanager).
 
 ## License
 

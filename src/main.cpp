@@ -1,3 +1,5 @@
+#include "notification.h"
+
 #include <QBackingStore>
 #include <QDebug>
 #include <QElapsedTimer>
@@ -16,14 +18,12 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
-#include <QUrl>
 #include <QWindow>
 
 #include <LayerShellQt/Window>
 
 #include <algorithm>
 #include <cerrno>
-#include <cstring>
 #include <functional>
 #include <systemd/sd-bus.h>
 #include <unistd.h>
@@ -42,19 +42,6 @@ struct AppConfig
     int topMargin = 18;
     int bottomMargin = 58;
     int gap = 12;
-};
-
-struct NotificationData
-{
-    quint32 notificationId = 0;
-    QString appName;
-    QString appIcon;
-    QString imagePath;
-    QString desktopEntry;
-    QString title;
-    QString body;
-    int remainingMs = 5000;
-    int totalLifetimeMs = 5000;
 };
 
 static AppConfig loadConfig()
@@ -188,91 +175,6 @@ static QList<QScreen *> selectTargetScreens(const AppConfig &config)
     return uniqueTargets;
 }
 
-static QIcon themedIcon(const QString &name)
-{
-    const QString cleaned = name.trimmed();
-    if (cleaned.isEmpty())
-        return {};
-
-    QIcon icon = QIcon::fromTheme(cleaned);
-    if (!icon.isNull())
-        return icon;
-
-    if (cleaned.endsWith(QStringLiteral(".desktop"))) {
-        icon = QIcon::fromTheme(cleaned.chopped(8));
-        if (!icon.isNull())
-            return icon;
-    }
-
-    return {};
-}
-
-static QIcon iconFromPathOrTheme(const QString &value)
-{
-    const QString cleaned = value.trimmed();
-    if (cleaned.isEmpty())
-        return {};
-
-    if (cleaned.startsWith(QStringLiteral("file://"))) {
-        const QString path = QUrl(cleaned).toLocalFile();
-        if (!path.isEmpty() && QFileInfo::exists(path))
-            return QIcon(path);
-    }
-
-    if (QFileInfo(cleaned).isAbsolute() && QFileInfo::exists(cleaned))
-        return QIcon(cleaned);
-
-    return themedIcon(cleaned);
-}
-
-static QIcon iconFromDesktopEntry(const QString &desktopEntry)
-{
-    QString entry = desktopEntry.trimmed();
-    if (entry.isEmpty())
-        return {};
-
-    if (entry.endsWith(QStringLiteral(".desktop")))
-        entry.chop(8);
-
-    const QStringList applicationDirs = QStandardPaths::standardLocations(QStandardPaths::ApplicationsLocation);
-    for (const QString &dir : applicationDirs) {
-        const QString path = dir + QLatin1Char('/') + entry + QStringLiteral(".desktop");
-        if (!QFileInfo::exists(path))
-            continue;
-
-        QSettings desktopFile(path, QSettings::IniFormat);
-        const QString iconName = desktopFile.value(QStringLiteral("Desktop Entry/Icon")).toString();
-        QIcon icon = iconFromPathOrTheme(iconName);
-        if (!icon.isNull())
-            return icon;
-    }
-
-    return themedIcon(entry);
-}
-
-static QIcon resolveNotificationIcon(const NotificationData &data)
-{
-    QIcon icon = iconFromPathOrTheme(data.imagePath);
-    if (!icon.isNull())
-        return icon;
-
-    icon = iconFromPathOrTheme(data.appIcon);
-    if (!icon.isNull())
-        return icon;
-
-    icon = iconFromDesktopEntry(data.desktopEntry);
-    if (!icon.isNull())
-        return icon;
-
-    QString normalized = data.appName.trimmed().toLower();
-    normalized.replace(QLatin1Char(' '), QLatin1Char('-'));
-    icon = themedIcon(normalized);
-    if (!icon.isNull())
-        return icon;
-
-    return {};
-}
-
 static int calculatePopupHeight(const NotificationData &data, int popupWidth)
 {
     constexpr int minHeight = 82;
@@ -282,7 +184,7 @@ static int calculatePopupHeight(const NotificationData &data, int popupWidth)
     constexpr int titleHeight = 20;
     constexpr int bodyTop = 55;
     constexpr int bottomPadding = 9;
-    constexpr int iconSize = 32;
+    constexpr int iconSize = 48;
     constexpr int iconTextGap = 10;
 
     QFont bodyFont = QGuiApplication::font();
@@ -290,9 +192,8 @@ static int calculatePopupHeight(const NotificationData &data, int popupWidth)
     bodyFont.setPointSizeF(9.5);
     QFontMetrics bodyMetrics(bodyFont);
 
-    const bool hasIcon = !resolveNotificationIcon(data).isNull();
-    const int textLeft = hasIcon ? leftPadding + iconSize + iconTextGap : leftPadding;
-    const int bodyWidth = popupWidth - textLeft - rightPadding;
+    const bool hasIcon = !resolveNotificationIcons(data).content.isNull();
+    const int bodyWidth = popupWidth - leftPadding - rightPadding - (hasIcon ? iconSize + iconTextGap : 0);
 
     int bodyHeight = 0;
     if (!data.body.trimmed().isEmpty()) {
@@ -330,7 +231,7 @@ public:
           totalLifetimeMs(qMax(1, data.totalLifetimeMs))
     {
         popupHeight = calculatePopupHeight(notification, config.width);
-        notificationIcon = resolveNotificationIcon(notification);
+        notificationIcons = resolveNotificationIcons(notification);
 
         setSurfaceType(QWindow::RasterSurface);
 
@@ -476,7 +377,7 @@ private:
     LayerShellQt::Window *layerWindow = nullptr;
     NotificationData notification;
     AppConfig config;
-    QIcon notificationIcon;
+    NotificationIcons notificationIcons;
     std::function<void(NotificationOverlay *)> onClose;
     int remainingMs = 5000;
     int totalLifetimeMs = 5000;
@@ -541,7 +442,7 @@ private:
         constexpr int titleHeight = 20;
         constexpr int bodyTop = 55;
         constexpr int bottomPadding = 9;
-        constexpr int iconSize = 32;
+        constexpr int iconSize = 48;
         constexpr int iconTextGap = 10;
 
         const QRect rect(QPoint(0, 0), size());
@@ -569,7 +470,16 @@ private:
         const QString appText = notification.appName.trimmed().isEmpty()
             ? QStringLiteral("Notification")
             : notification.appName.trimmed();
-        const QRect appRect(leftPadding, appTop, width() - leftPadding - rightPadding - 26, appHeight);
+        constexpr int applicationIconSize = 16;
+        constexpr int applicationIconGap = 6;
+        const bool hasApplicationIcon = !notificationIcons.application.isNull();
+        if (hasApplicationIcon)
+            notificationIcons.application.paint(&painter,
+                QRect(leftPadding, appTop, applicationIconSize, applicationIconSize));
+        const int applicationTextLeft = leftPadding
+            + (hasApplicationIcon ? applicationIconSize + applicationIconGap : 0);
+        const QRect appRect(applicationTextLeft, appTop,
+                            width() - applicationTextLeft - rightPadding - 26, appHeight);
         painter.drawText(appRect, Qt::AlignLeft | Qt::AlignVCenter,
                          elide(appText, appFont, appRect.width()));
 
@@ -591,13 +501,13 @@ private:
         const int fillWidth = qBound(0, static_cast<int>(width() * ratio), width());
         painter.fillRect(QRect(0, progressY, fillWidth, progressHeight), QColor(110, 130, 255, 235));
 
-        const bool hasIcon = !notificationIcon.isNull();
-        const int textLeft = hasIcon ? leftPadding + iconSize + iconTextGap : leftPadding;
+        const bool hasIcon = !notificationIcons.content.isNull();
+        const int textLeft = leftPadding;
+        const int textWidth = width() - textLeft - rightPadding - (hasIcon ? iconSize + iconTextGap : 0);
 
         if (hasIcon) {
-            const QPixmap pixmap = notificationIcon.pixmap(QSize(iconSize, iconSize));
-            if (!pixmap.isNull())
-                painter.drawPixmap(QRect(leftPadding, titleTop + 2, iconSize, iconSize), pixmap);
+            notificationIcons.content.paint(&painter,
+                QRect(width() - rightPadding - iconSize, titleTop, iconSize, iconSize));
         }
 
         QFont titleFont = painter.font();
@@ -605,7 +515,7 @@ private:
         titleFont.setPointSizeF(10.5);
         painter.setFont(titleFont);
         painter.setPen(QColor(245, 245, 245));
-        const QRect titleRect(textLeft, titleTop, width() - textLeft - rightPadding, titleHeight);
+        const QRect titleRect(textLeft, titleTop, textWidth, titleHeight);
         painter.drawText(titleRect, Qt::AlignLeft | Qt::AlignVCenter,
                          elide(notification.title, titleFont, titleRect.width()));
 
@@ -614,7 +524,7 @@ private:
         bodyFont.setPointSizeF(9.5);
         painter.setFont(bodyFont);
         painter.setPen(QColor(220, 220, 220));
-        const QRect bodyRect(textLeft, bodyTop, width() - textLeft - rightPadding,
+        const QRect bodyRect(textLeft, bodyTop, textWidth,
                              height() - bodyTop - bottomPadding);
         painter.drawText(bodyRect, Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap, notification.body);
 
@@ -749,7 +659,6 @@ private:
 struct PendingNotify
 {
     NotificationData data;
-    quint32 replacesId = 0;
 };
 
 class NotificationBusMonitor : public QObject
@@ -943,40 +852,11 @@ private:
         if (sd_bus_message_rewind(message, true) < 0)
             return;
 
-        const char *appName = nullptr;
-        const char *appIcon = nullptr;
-        const char *summary = nullptr;
-        const char *body = nullptr;
-        uint32_t replacesId = 0;
-
-        int r = sd_bus_message_read(
-            message,
-            "susss",
-            &appName,
-            &replacesId,
-            &appIcon,
-            &summary,
-            &body);
-        if (r < 0) {
+        PendingNotify pending;
+        if (!readNotificationPayload(message, pending.data)) {
             qWarning() << "Ignoring malformed Notify() call.";
             return;
         }
-
-        PendingNotify pending;
-        pending.replacesId = replacesId;
-        pending.data.appName = QString::fromUtf8(appName ? appName : "");
-        pending.data.appIcon = QString::fromUtf8(appIcon ? appIcon : "");
-        pending.data.title = QString::fromUtf8(summary ? summary : "");
-        pending.data.body = QString::fromUtf8(body ? body : "");
-
-        r = sd_bus_message_skip(message, "as");
-        if (r < 0)
-            return;
-
-        parseHints(message, pending.data);
-
-        int32_t expireTimeout = -1;
-        (void) sd_bus_message_read(message, "i", &expireTimeout);
 
         uint64_t cookie = 0;
         if (sd_bus_message_get_cookie(message, &cookie) < 0)
@@ -984,54 +864,6 @@ private:
 
         const char *sender = sd_bus_message_get_sender(message);
         pendingCalls.insert(callKey(sender, cookie), pending);
-    }
-
-    static void parseHints(sd_bus_message *message, NotificationData &data)
-    {
-        int r = sd_bus_message_enter_container(message, SD_BUS_TYPE_ARRAY, "{sv}");
-        if (r <= 0)
-            return;
-
-        for (;;) {
-            r = sd_bus_message_enter_container(message, SD_BUS_TYPE_DICT_ENTRY, "sv");
-            if (r <= 0)
-                break;
-
-            const char *keyRaw = nullptr;
-            if (sd_bus_message_read(message, "s", &keyRaw) < 0) {
-                sd_bus_message_exit_container(message);
-                break;
-            }
-
-            const QString key = QString::fromUtf8(keyRaw ? keyRaw : "");
-            const char *variantSignature = nullptr;
-            char variantType = 0;
-            const int peek = sd_bus_message_peek_type(message, &variantType, &variantSignature);
-
-            if (peek > 0 && variantType == SD_BUS_TYPE_VARIANT && variantSignature
-                && strcmp(variantSignature, "s") == 0
-                && (key == QStringLiteral("image-path")
-                    || key == QStringLiteral("image_path")
-                    || key == QStringLiteral("desktop-entry"))) {
-                if (sd_bus_message_enter_container(message, SD_BUS_TYPE_VARIANT, "s") > 0) {
-                    const char *valueRaw = nullptr;
-                    if (sd_bus_message_read(message, "s", &valueRaw) >= 0) {
-                        const QString value = QString::fromUtf8(valueRaw ? valueRaw : "");
-                        if (key == QStringLiteral("desktop-entry"))
-                            data.desktopEntry = value;
-                        else
-                            data.imagePath = value;
-                    }
-                    sd_bus_message_exit_container(message);
-                }
-            } else {
-                (void) sd_bus_message_skip(message, "v");
-            }
-
-            sd_bus_message_exit_container(message);
-        }
-
-        sd_bus_message_exit_container(message);
     }
 
     void handleMethodReturn(sd_bus_message *message)
@@ -1060,6 +892,7 @@ private:
         NotificationData data = it->data;
         data.notificationId = notificationId;
         pendingCalls.erase(it);
+        resolveSenderDesktopEntry(data, QString::fromUtf8(destination ? destination : ""));
 
         for (OverlayManager *manager : managers)
             manager->upsertNotification(data);
@@ -1095,6 +928,7 @@ int main(int argc, char **argv)
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("plasma-notification-mirror"));
 
+    initializeIconTheme();
     const AppConfig config = loadConfig();
     const QList<QScreen *> targets = selectTargetScreens(config);
 

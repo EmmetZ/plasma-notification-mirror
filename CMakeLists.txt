@@ -5,22 +5,37 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui DBus)
 find_package(LayerShellQt REQUIRED)
+find_package(KF6Service REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBSYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 
-add_executable(plasma-notification-mirror
-    src/main.cpp
+add_library(notification-support STATIC
+    src/notification.cpp
 )
+target_include_directories(notification-support PUBLIC src)
+target_link_libraries(notification-support PUBLIC Qt6::Core Qt6::Gui Qt6::DBus KF6::Service PkgConfig::LIBSYSTEMD)
+
+add_executable(plasma-notification-mirror src/main.cpp)
 
 target_link_libraries(plasma-notification-mirror
     PRIVATE
-        Qt6::Core
-        Qt6::Gui
+        notification-support
         LayerShellQt::Interface
         PkgConfig::LIBSYSTEMD
 )
+
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    add_executable(notification-tests tests/notification_test.cpp)
+    set_target_properties(notification-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(notification-tests PRIVATE notification-support Qt6::Test)
+    add_test(NAME notification-tests
+        COMMAND dbus-run-session -- $<TARGET_FILE:notification-tests>)
+    set_tests_properties(notification-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 include(GNUInstallDirs)
 
