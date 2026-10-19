@@ -13,6 +13,8 @@ struct NotificationData
     QString imagePath;
     QImage image;
     QImage legacyImage;
+    QStringList actions;
+    bool resident = false;
     QString desktopEntry;
     QString notifyRcName;
     QString title;

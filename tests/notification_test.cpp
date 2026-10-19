@@ -1,5 +1,9 @@
 #include "notification.h"
+#include "notificationactions.h"
 
+#include <QDBusAbstractAdaptor>
+#include <QDBusConnection>
+#include <QDBusPendingCallWatcher>
 #include <QFile>
 #include <QDir>
 #include <QScopeGuard>
@@ -12,11 +16,47 @@
 struct BusDeleter { void operator()(sd_bus *bus) const { sd_bus_flush_close_unref(bus); } };
 struct MessageDeleter { void operator()(sd_bus_message *message) const { sd_bus_message_unref(message); } };
 
+class FakeServer : public QObject
+{
+public:
+    QList<quint32> invoked;
+    QList<quint32> closed;
+};
+
+class ActionAdaptor : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.kde.NotificationManager")
+public:
+    explicit ActionAdaptor(FakeServer *server) : QDBusAbstractAdaptor(server), server(server) {}
+public slots:
+    void InvokeAction(uint id, const QString &action)
+    {
+        QCOMPARE(action, QStringLiteral("default"));
+        server->invoked.append(id);
+    }
+private:
+    FakeServer *server;
+};
+
+class CloseAdaptor : public QDBusAbstractAdaptor
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.Notifications")
+public:
+    explicit CloseAdaptor(FakeServer *server) : QDBusAbstractAdaptor(server), server(server) {}
+public slots:
+    void CloseNotification(uint id) { server->closed.append(id); }
+private:
+    FakeServer *server;
+};
+
 class NotificationTest : public QObject
 {
     Q_OBJECT
 private:
     std::unique_ptr<sd_bus, BusDeleter> bus;
+    FakeServer server;
 
     std::unique_ptr<sd_bus_message, MessageDeleter> messageWithImage(
         int width, int height, int stride, int alpha, int bits, int channels,
@@ -58,6 +98,12 @@ private slots:
         sd_bus *raw = nullptr;
         QVERIFY(sd_bus_open_user(&raw) >= 0);
         bus.reset(raw);
+        auto dbus = QDBusConnection::sessionBus();
+        QVERIFY(dbus.registerService(QStringLiteral("org.freedesktop.Notifications")));
+        new ActionAdaptor(&server);
+        new CloseAdaptor(&server);
+        QVERIFY(dbus.registerObject(QStringLiteral("/org/freedesktop/Notifications"), &server,
+                                    QDBusConnection::ExportAdaptors));
     }
 
     void imageFormats_data()
@@ -88,6 +134,8 @@ private slots:
         QCOMPARE(image.pixelColor(1, 1), QColor(0, 255, 0));
         QCOMPARE(data.desktopEntry, QStringLiteral("org.example.Test"));
         QCOMPARE(data.notifyRcName, QStringLiteral("test-component"));
+        QVERIFY(data.resident);
+        QVERIFY(hasDefaultAction(data));
         QVERIFY(!resolveNotificationIcons(data).content.isNull());
     }
 
@@ -115,8 +163,9 @@ private slots:
         NotificationData data;
         QVERIFY(readNotificationPayload(message.get(), data));
         QVERIFY(data.image.isNull());
-        // A bad image must not break later hints.
+        // A bad image must not break later hints or default action parsing.
         QCOMPARE(data.desktopEntry, QStringLiteral("org.example.Test"));
+        QVERIFY(hasDefaultAction(data));
     }
 
     void imagePriority()
@@ -126,6 +175,13 @@ private slots:
         data.image.fill(Qt::red);
         data.appIcon = QStringLiteral("dialog-information");
         QCOMPARE(resolveNotificationIcons(data).content.pixmap(2, 2).toImage().pixelColor(0, 0), QColor(Qt::red));
+    }
+
+    void defaultActionOnlyUsesKeys()
+    {
+        NotificationData data;
+        data.actions = {QStringLiteral("other"), QStringLiteral("default")};
+        QVERIFY(!hasDefaultAction(data));
     }
 
     void iconSearchPathsWithoutPlatformTheme()
@@ -232,7 +288,56 @@ private slots:
         QCOMPARE(separated.content.pixmap(32, 32).toImage().pixelColor(0, 0), QColor(Qt::green));
     }
 
+    void actions()
+    {
+        NotificationActions actions;
+        QList<quint32> dismissed;
+        actions.onInvoked = [&dismissed](quint32 id) { dismissed.append(id); };
+        NotificationData data;
+        data.notificationId = 71;
+        data.actions = {QStringLiteral("default"), QStringLiteral("Open")};
+        actions.invokeDefault(data);
+        actions.invokeDefault(data); // double clicks must invoke only once while pending
+        QTRY_COMPARE(server.invoked.count(71), 1);
+        QTRY_VERIFY(server.closed.contains(71));
+        QCOMPARE(dismissed.count(71), 1);
 
+        data.notificationId = 72;
+        data.resident = true;
+        actions.invokeDefault(data);
+        QTRY_VERIFY(server.invoked.contains(72));
+        QTest::qWait(20);
+        QVERIFY(!server.closed.contains(72));
+        QVERIFY(!dismissed.contains(72));
+
+        data.notificationId = 73;
+        data.actions.clear();
+        actions.invokeDefault(data);
+        QTest::qWait(20);
+        QVERIFY(!server.invoked.contains(73));
+    }
+
+    void failedActionCanRetry()
+    {
+        auto dbus = QDBusConnection::sessionBus();
+        dbus.unregisterObject(QStringLiteral("/org/freedesktop/Notifications"));
+        NotificationActions actions;
+        bool dismissed = false;
+        actions.onInvoked = [&dismissed](quint32) { dismissed = true; };
+        NotificationData data;
+        data.notificationId = 74;
+        data.actions = {QStringLiteral("default"), QStringLiteral("Open")};
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression("Could not invoke notification action:.*"));
+        actions.invokeDefault(data);
+        QTRY_VERIFY(actions.findChildren<QDBusPendingCallWatcher *>().isEmpty());
+        QVERIFY(!dismissed);
+        QVERIFY(!server.closed.contains(74));
+        QVERIFY(dbus.registerObject(QStringLiteral("/org/freedesktop/Notifications"), &server,
+                                    QDBusConnection::ExportAdaptors));
+        actions.invokeDefault(data);
+        QTRY_VERIFY(server.invoked.contains(74));
+        QTRY_VERIFY(dismissed);
+    }
 };
 
 QTEST_MAIN(NotificationTest)

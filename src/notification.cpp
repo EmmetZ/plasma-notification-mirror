@@ -275,6 +275,14 @@ static bool readHints(sd_bus_message *message, NotificationData &data)
             else
                 data.imagePath = QString::fromUtf8(value);
             sd_bus_message_exit_container(message);
+        } else if (key == QStringLiteral("resident") && std::strcmp(signature, "b") == 0) {
+            if (sd_bus_message_enter_container(message, SD_BUS_TYPE_VARIANT, "b") <= 0)
+                return false;
+            int resident = 0;
+            if (sd_bus_message_read(message, "b", &resident) <= 0)
+                return false;
+            data.resident = resident;
+            sd_bus_message_exit_container(message);
         } else if (sd_bus_message_skip(message, "v") < 0) {
             return false;
         }
@@ -295,7 +303,13 @@ bool readNotificationPayload(sd_bus_message *message, NotificationData &data)
     data.title = QString::fromUtf8(title);
     data.body = QString::fromUtf8(body);
 
-    if (sd_bus_message_skip(message, "as") < 0)
+    if (sd_bus_message_enter_container(message, SD_BUS_TYPE_ARRAY, "s") <= 0)
+        return false;
+    const char *action = nullptr;
+    int r = 0;
+    while ((r = sd_bus_message_read(message, "s", &action)) > 0)
+        data.actions.append(QString::fromUtf8(action));
+    if (r < 0 || sd_bus_message_exit_container(message) < 0 || data.actions.size() % 2 != 0)
         return false;
     if (!readHints(message, data))
         return false;

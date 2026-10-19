@@ -30,6 +30,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 - Manual close button
 - Existing notifications compact when one is dismissed
 - Icons from raw `image-data` / `image_data` / `icon_data`, image paths, application icons, desktop entries, and icon themes
+- Click a mirrored notification to invoke the application-provided default action through Plasma
 - Typed D-Bus monitoring: notifications are mirrored only after the notification daemon accepts them and returns their notification ID
 - Handles notification replacement and `NotificationClosed` events
 - Configurable width, lifetime, stack gap, and maximum popup count
@@ -247,7 +248,8 @@ ctest --test-dir build --output-on-failure
 
 Tests cover RGB/RGBA image payloads, deprecated image hints, malformed image buffers,
 file and desktop-entry icons, application/content icon separation and duplicate suppression,
-and icon lookup without a desktop platform plugin. The isolated session does not use your desktop's
+icon lookup without a desktop platform plugin, default action invocation, duplicate clicks, resident
+notifications, and action errors. The isolated session does not use your desktop's
 notification service. Tests can be omitted at configure time with `-DBUILD_TESTING=OFF`.
 
 Send a test notification:
@@ -265,6 +267,17 @@ notify-send -a "Mirror Test" -i dialog-information "Notification 1" "First item"
 notify-send -a "Mirror Test" -i dialog-information "Notification 2" "Second item"
 notify-send -a "Mirror Test" -i dialog-information "Notification 3" "Third item"
 ```
+
+Test a clickable default action (click the mirrored card):
+
+```bash
+notify-send --wait --action=default=Open -i dialog-information \
+  "Clickable mirror test" "Click this card to print default in the terminal."
+```
+
+`notify-send` prints the action key. Test opening a real window with an application
+that already provides clickable notifications, such as a chat client. A plain
+`notify-send` without `--action` has no default click behavior.
 
 Check the service:
 
@@ -378,6 +391,19 @@ The reference implementation is Plasma 6.8.0's
 [NotificationHeader.qml](https://github.com/KDE/plasma-workspace/blob/v6.8.0/applets/notifications/components/NotificationHeader.qml),
 [DelegatePopup.qml](https://github.com/KDE/plasma-workspace/blob/v6.8.0/applets/notifications/delegates/DelegatePopup.qml),
 and [notification.cpp / server_p.cpp](https://github.com/KDE/plasma-workspace/tree/v6.8.0/libnotificationmanager).
+
+Clicking the card invokes only the `default` action advertised by the application,
+using Plasma's `org.kde.NotificationManager.InvokeAction` interface on a separate
+D-Bus connection. Notifications without that action do not open an application.
+A successful action closes non-resident notifications and their mirrored copies;
+resident notifications remain. The × button continues to dismiss only the local
+mirror. An action failure is logged and leaves the mirror visible.
+
+This Plasma interface does not accept a Wayland activation token. The action is
+forwarded, but whether an existing window is raised/focused depends on the application
+and compositor. This does not reproduce all of Plasma's native window-activation
+behavior. Inline replies, custom action buttons, and clickable body links are not
+implemented.
 
 ## License
 

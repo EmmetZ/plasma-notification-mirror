@@ -13,6 +13,7 @@ pkg_check_modules(LIBSYSTEMD REQUIRED IMPORTED_TARGET libsystemd)
 
 add_library(notification-support STATIC
     src/notification.cpp
+    src/notificationactions.cpp
 )
 target_include_directories(notification-support PUBLIC src)
 target_link_libraries(notification-support PUBLIC Qt6::Core Qt6::Gui Qt6::DBus KF6::Service PkgConfig::LIBSYSTEMD)

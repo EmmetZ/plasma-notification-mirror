@@ -1,4 +1,5 @@
 #include "notification.h"
+#include "notificationactions.h"
 
 #include <QBackingStore>
 #include <QDebug>
@@ -222,11 +223,13 @@ public:
         int stackMargin,
         const NotificationData &data,
         const AppConfig &config,
-        std::function<void(NotificationOverlay *)> onClose)
+        std::function<void(NotificationOverlay *)> onClose,
+        std::function<void(const NotificationData &)> onActivate)
         : backingStore(this),
           notification(data),
           config(config),
           onClose(std::move(onClose)),
+          onActivate(std::move(onActivate)),
           remainingMs(qMax(1, data.remainingMs)),
           totalLifetimeMs(qMax(1, data.totalLifetimeMs))
     {
@@ -241,6 +244,8 @@ public:
 
         setFlags(Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
         setScreen(screen);
+        if (hasDefaultAction(notification))
+            setCursor(Qt::PointingHandCursor);
         resize(config.width, popupHeight);
 
         layerWindow = LayerShellQt::Window::get(this);
@@ -308,6 +313,7 @@ public:
         repaintTimer.stop();
         hide();
         onClose = nullptr;
+        onActivate = nullptr;
     }
 
     void closeOverlay()
@@ -361,12 +367,30 @@ protected:
 
     void mousePressEvent(QMouseEvent *event) override
     {
-        if (event->button() == Qt::LeftButton
-            && closeButtonRect().contains(event->position().toPoint())) {
-            closeOverlay();
+        if (event->button() == Qt::LeftButton) {
+            pressed = true;
+            pressedClose = closeButtonRect().contains(event->position().toPoint());
+            event->accept();
             return;
         }
         QWindow::mousePressEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && pressed) {
+            pressed = false;
+            const QPoint point = event->position().toPoint();
+            if (pressedClose && closeButtonRect().contains(point))
+                closeOverlay();
+            else if (!pressedClose && !closeButtonRect().contains(point)
+                     && QRect(QPoint(0, 0), size()).contains(point)
+                     && hasDefaultAction(notification) && onActivate)
+                onActivate(notification);
+            event->accept();
+            return;
+        }
+        QWindow::mouseReleaseEvent(event);
     }
 
 private:
@@ -379,6 +403,9 @@ private:
     AppConfig config;
     NotificationIcons notificationIcons;
     std::function<void(NotificationOverlay *)> onClose;
+    std::function<void(const NotificationData &)> onActivate;
+    bool pressed = false;
+    bool pressedClose = false;
     int remainingMs = 5000;
     int totalLifetimeMs = 5000;
     int popupHeight = 82;
@@ -537,8 +564,9 @@ private:
 class OverlayManager : public QObject
 {
 public:
-    OverlayManager(QScreen *screen, const AppConfig &config, QObject *parent = nullptr)
-        : QObject(parent), screen(screen), config(config)
+    OverlayManager(QScreen *screen, const AppConfig &config,
+                   NotificationActions *actions, QObject *parent = nullptr)
+        : QObject(parent), screen(screen), config(config), actions(actions)
     {
     }
 
@@ -590,6 +618,7 @@ public:
 private:
     QScreen *screen;
     AppConfig config;
+    NotificationActions *actions;
     QList<NotificationData> notifications;
     QList<NotificationOverlay *> overlays;
     bool rebuilding = false;
@@ -627,7 +656,8 @@ private:
                 stackMargin,
                 notifications.at(i),
                 config,
-                [this](NotificationOverlay *item) { overlayClosed(item); });
+                [this](NotificationOverlay *item) { overlayClosed(item); },
+                [this](const NotificationData &data) { actions->invokeDefault(data); });
             overlays.append(overlay);
             overlay->showNotification();
             accumulatedHeight +=
@@ -940,12 +970,17 @@ int main(int argc, char **argv)
     qInfo() << "Primary monitor:" << QGuiApplication::primaryScreen()->name();
     qInfo() << "Mirror mode:" << config.mode;
 
+    NotificationActions actions;
     QList<OverlayManager *> managers;
     for (QScreen *screen : targets) {
         qInfo() << "Mirror monitor:" << screen->name();
-        managers.append(new OverlayManager(screen, config, &app));
+        managers.append(new OverlayManager(screen, config, &actions, &app));
     }
 
+    actions.onInvoked = [&managers](quint32 id) {
+        for (OverlayManager *manager : managers)
+            manager->closeNotification(id);
+    };
     NotificationBusMonitor monitor(managers, &app);
     if (!monitor.start())
         return 1;
