@@ -17,8 +17,13 @@ const QString properties = QStringLiteral("org.freedesktop.DBus.Properties");
 class FakeNotifications : public QDBusVirtualObject
 {
 public:
+    // Use a separate connection so Qt cannot optimize calls into synchronous
+    // local dispatch; delayed replies must exercise the actual D-Bus transport.
+    const QDBusConnection bus = QDBusConnection::connectToBus(
+        QDBusConnection::SessionBus, QStringLiteral("inhibition-test-server"));
     bool inhibited = false;
     bool holdReads = false;
+    bool failReads = false;
     int reads = 0;
     QList<QDBusMessage> held;
 
@@ -31,7 +36,10 @@ public:
         if (message.arguments() != QVariantList({service, QStringLiteral("Inhibited")}))
             return false;
         ++reads;
-        if (holdReads)
+        if (failReads)
+            bus.send(message.createErrorReply(QStringLiteral("org.freedesktop.DBus.Error.Failed"),
+                                              QStringLiteral("Temporary read failure")));
+        else if (holdReads)
             held.append(message);
         else
             bus.send(message.createReply({QVariant::fromValue(QDBusVariant(inhibited))}));
@@ -43,7 +51,7 @@ public:
     {
         auto signal = QDBusMessage::createSignal(path, properties, QStringLiteral("PropertiesChanged"));
         signal.setArguments({interface, changed, invalidated});
-        QVERIFY(QDBusConnection::sessionBus().send(signal));
+        QVERIFY(bus.send(signal));
     }
 
     void setInhibited(bool value)
@@ -63,16 +71,18 @@ private slots:
     {
         server.inhibited = false;
         server.holdReads = false;
+        server.failReads = false;
         server.reads = 0;
         server.held.clear();
-        auto bus = QDBusConnection::sessionBus();
+        auto bus = server.bus;
+        QVERIFY(bus.isConnected());
         QVERIFY(bus.registerVirtualObject(path, &server));
         QVERIFY(bus.registerService(service));
     }
 
     void cleanup()
     {
-        auto bus = QDBusConnection::sessionBus();
+        auto bus = server.bus;
         QVERIFY(bus.unregisterService(service));
         bus.unregisterObject(path);
     }
@@ -125,7 +135,7 @@ private slots:
         QTRY_COMPARE(server.held.size(), 1);
         QVERIFY(state.blocksPopups());
         auto request = server.held.takeFirst();
-        QVERIFY(QDBusConnection::sessionBus().send(
+        QVERIFY(server.bus.send(
             request.createReply({QVariant::fromValue(QDBusVariant(true))})));
         QTRY_VERIFY(state.findChildren<QDBusPendingCallWatcher *>().isEmpty());
         QVERIFY(state.blocksPopups());
@@ -144,10 +154,46 @@ private slots:
         server.setInhibited(true);
         QTRY_VERIFY(state.blocksPopups());
         auto request = server.held.takeFirst();
-        QVERIFY(QDBusConnection::sessionBus().send(
+        QVERIFY(server.bus.send(
             request.createReply({QVariant::fromValue(QDBusVariant(false))})));
         QTRY_VERIFY(state.findChildren<QDBusPendingCallWatcher *>().isEmpty());
         QVERIFY(state.blocksPopups());
+    }
+
+    void failedReadRetries()
+    {
+        server.failReads = true;
+        NotificationInhibition state;
+        QTest::ignoreMessage(QtWarningMsg, "Could not read Plasma notification inhibition; mirroring is paused.");
+        state.start();
+        QTRY_COMPARE(server.reads, 1);
+        QTRY_VERIFY(state.findChildren<QDBusPendingCallWatcher *>().isEmpty());
+        QVERIFY(state.blocksPopups());
+        server.failReads = false;
+        QTRY_VERIFY_WITH_TIMEOUT(!state.blocksPopups(), 5000);
+        QCOMPARE(server.reads, 2);
+    }
+
+    void invalidationCancelsScheduledRetry()
+    {
+        server.failReads = true;
+        NotificationInhibition state;
+        QTest::ignoreMessage(QtWarningMsg, "Could not read Plasma notification inhibition; mirroring is paused.");
+        state.start();
+        QTRY_COMPARE(server.reads, 1);
+        QTRY_VERIFY(state.findChildren<QDBusPendingCallWatcher *>().isEmpty());
+        QTest::qWait(1000);
+        server.failReads = false;
+        server.holdReads = true;
+        server.sendProperties({}, {QStringLiteral("Inhibited")});
+        QTRY_COMPARE(server.held.size(), 1);
+        // An obsolete retry must not supersede the newer in-flight read.
+        QTest::qWait(2300);
+        QCOMPARE(server.reads, 2);
+        auto request = server.held.takeFirst();
+        QVERIFY(server.bus.send(
+            request.createReply({QVariant::fromValue(QDBusVariant(false))})));
+        QTRY_VERIFY(!state.blocksPopups());
     }
 
     void daemonRestart()
@@ -155,7 +201,7 @@ private slots:
         NotificationInhibition state;
         state.start();
         QTRY_VERIFY(!state.blocksPopups());
-        auto bus = QDBusConnection::sessionBus();
+        auto bus = server.bus;
         QVERIFY(bus.unregisterService(service));
         QTRY_VERIFY(state.blocksPopups());
         server.inhibited = true;

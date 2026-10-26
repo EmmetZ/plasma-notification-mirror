@@ -380,7 +380,8 @@ notifications, and action errors. The isolated session does not use your desktop
 notification service. Tests can be omitted at configure time with `-DBUILD_TESTING=OFF`.
 
 Inhibition tests cover startup in Do Not Disturb, live changes, property invalidation,
-stale asynchronous reads, and daemon restarts. To check manually, toggle Plasma's
+failed reads and retry cancellation, stale asynchronous reads, and daemon restarts.
+To check manually, toggle Plasma's
 Do Not Disturb and send test notifications: mirrors should stop and resume without
 restarting the service, and notifications received while inhibited should not replay.
 

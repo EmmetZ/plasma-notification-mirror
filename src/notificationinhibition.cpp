@@ -35,17 +35,19 @@ void NotificationInhibition::start()
         QDBusServiceWatcher::WatchForOwnerChange, this);
     connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this,
             [this](const QString &, const QString &, const QString &owner) {
-        ++revision;
-        retryTimer.stop();
-        setBlocked(true);
+        updateState(true);
         if (!owner.isEmpty())
             refresh();
     });
     refresh();
 }
 
-void NotificationInhibition::setBlocked(bool value)
+void NotificationInhibition::updateState(bool value)
 {
+    // Every observation supersedes older reads and scheduled retries, even
+    // when the blocking state itself has not changed.
+    ++revision;
+    retryTimer.stop();
     if (blocked == value)
         return;
     blocked = value;
@@ -67,14 +69,13 @@ void NotificationInhibition::refresh()
         if (requestRevision != revision)
             return;
         if (reply.isError() || reply.value().variant().metaType() != QMetaType::fromType<bool>()) {
-            setBlocked(true);
+            updateState(true);
             qWarning() << "Could not read Plasma notification inhibition; mirroring is paused.";
             retryTimer.start();
             return;
         }
-        retryTimer.stop();
         qInfo() << "Plasma notification inhibition:" << reply.value().variant().toBool();
-        setBlocked(reply.value().variant().toBool());
+        updateState(reply.value().variant().toBool());
     });
 }
 
@@ -83,12 +84,11 @@ void NotificationInhibition::propertiesChanged(const QString &interface, const Q
 {
     if (interface != service)
         return;
-    if (changed.contains(inhibited) && changed.value(inhibited).metaType() == QMetaType::fromType<bool>()) {
-        ++revision;
-        retryTimer.stop();
-        setBlocked(changed.value(inhibited).toBool());
+    const QVariant value = changed.value(inhibited);
+    if (value.metaType() == QMetaType::fromType<bool>()) {
+        updateState(value.toBool());
     } else if (invalidated.contains(inhibited) || changed.contains(inhibited)) {
-        setBlocked(true);
+        updateState(true);
         refresh();
     }
 }

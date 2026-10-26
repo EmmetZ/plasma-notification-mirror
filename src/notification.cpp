@@ -108,6 +108,10 @@ static KService::Ptr findApplication(const NotificationData &data)
             return service;
     }
 
+    const QString appName = data.appName.trimmed();
+    if (entry.isEmpty() && appName.isEmpty())
+        return {};
+
     // Exact, case-insensitive identities also cover clients advertising a short
     // WM class (e.g. "wechat") instead of their exported Flatpak desktop ID.
     const auto matches = KApplicationTrader::query([&](const KService::Ptr &service) {
@@ -120,7 +124,6 @@ static KService::Ptr findApplication(const NotificationData &data)
             if (renamed.contains(entry + QStringLiteral(".desktop")))
                 return true;
         }
-        const QString appName = data.appName.trimmed();
         if (appName.isEmpty())
             return false;
         return service->name().compare(appName, Qt::CaseInsensitive) == 0

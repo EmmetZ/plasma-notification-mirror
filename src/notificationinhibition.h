@@ -23,7 +23,7 @@ private slots:
 
 private:
     void refresh();
-    void setBlocked(bool value);
+    void updateState(bool value);
     bool blocked = true;
     quint64 revision = 0;
     QTimer retryTimer;
