@@ -1,6 +1,7 @@
 #include "config.h"
 #include "notification.h"
 #include "notificationactions.h"
+#include "notificationinhibition.h"
 #include "popuplayout.h"
 
 #include <QBackingStore>
@@ -485,6 +486,12 @@ public:
         }
     }
 
+    void clearNotifications()
+    {
+        notifications.clear();
+        rebuildOverlays();
+    }
+
 private:
     QPointer<QScreen> screen;
     PopupConfig config;
@@ -616,17 +623,22 @@ private:
     }
 };
 
-struct PendingNotify
-{
-    NotificationData data;
-};
-
 class NotificationBusMonitor : public QObject
 {
 public:
     explicit NotificationBusMonitor(TargetScreenManager &screens, QObject *parent = nullptr)
         : QObject(parent), screens(screens)
     {
+        connect(&inhibition, &NotificationInhibition::blockingChanged, this, [this](bool blocked) {
+            qInfo() << (blocked ? "Plasma notifications inhibited; mirroring paused."
+                               : "Plasma notifications enabled; mirroring resumed.");
+            if (blocked) {
+                // Never replay in-flight or visible notifications after leaving DND.
+                pendingCalls.clear();
+                for (OverlayManager *manager : this->screens.managers())
+                    manager->clearNotifications();
+            }
+        });
     }
 
     ~NotificationBusMonitor() override
@@ -638,6 +650,7 @@ public:
 
     bool start()
     {
+        inhibition.start();
         int r = sd_bus_new(&bus);
         if (r < 0) {
             logBusError("Failed to allocate D-Bus connection", r);
@@ -693,7 +706,8 @@ public:
 
 private:
     TargetScreenManager &screens;
-    QHash<QString, PendingNotify> pendingCalls;
+    NotificationInhibition inhibition;
+    QHash<QString, NotificationData> pendingCalls;
     sd_bus *bus = nullptr;
     QSocketNotifier *notifier = nullptr;
 
@@ -809,11 +823,13 @@ private:
 
     void handleNotifyCall(sd_bus_message *message)
     {
+        if (inhibition.blocksPopups())
+            return;
         if (sd_bus_message_rewind(message, true) < 0)
             return;
 
-        PendingNotify pending;
-        if (!readNotificationPayload(message, pending.data)) {
+        NotificationData data;
+        if (!readNotificationPayload(message, data)) {
             qWarning() << "Ignoring malformed Notify() call.";
             return;
         }
@@ -823,7 +839,7 @@ private:
             return;
 
         const char *sender = sd_bus_message_get_sender(message);
-        pendingCalls.insert(callKey(sender, cookie), pending);
+        pendingCalls.insert(callKey(sender, cookie), data);
     }
 
     void handleMethodReturn(sd_bus_message *message)
@@ -849,7 +865,7 @@ private:
             return;
         }
 
-        NotificationData data = it->data;
+        NotificationData data = it.value();
         data.notificationId = notificationId;
         pendingCalls.erase(it);
         resolveSenderDesktopEntry(data, QString::fromUtf8(destination ? destination : ""));

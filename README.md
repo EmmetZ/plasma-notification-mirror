@@ -33,6 +33,7 @@ Plasma normally shows a notification popup on only one monitor. Plasma Notificat
 - Automatic monitor reselection after hotplug and primary-monitor changes; waits when no target is available
 - Typed D-Bus monitoring: notifications are mirrored only after the notification daemon accepts them and returns their notification ID
 - Handles notification replacement and `NotificationClosed` events
+- Respects Plasma's notification inhibition / Do Not Disturb state, including live changes
 - Configurable width, lifetime, stack gap, and maximum popup count
 - User-level systemd service
 - No root process required
@@ -372,6 +373,11 @@ icon lookup without a desktop platform plugin, default action invocation, duplic
 notifications, and action errors. The isolated session does not use your desktop's
 notification service. Tests can be omitted at configure time with `-DBUILD_TESTING=OFF`.
 
+Inhibition tests cover startup in Do Not Disturb, live changes, property invalidation,
+stale asynchronous reads, and daemon restarts. To check manually, toggle Plasma's
+Do Not Disturb and send test notifications: mirrors should stop and resume without
+restarting the service, and notifications received while inhibited should not replay.
+
 Send a test notification:
 
 ```bash
@@ -500,6 +506,13 @@ It does not attempt to duplicate:
 - every internal Plasma notification UI behavior
 
 It does track daemon-side notification replacement and close events so mirrored popups remain aligned with the notification service.
+
+Mirroring pauses whenever Plasma reports `org.freedesktop.Notifications.Inhibited`,
+including Do Not Disturb and other notification inhibitors. All mirrored popups are
+suppressed while inhibited, including critical notifications. Popups are also paused
+until that state can be read at startup or after the notification daemon restarts.
+This does not duplicate Plasma's per-application popup settings or critical-notification
+exceptions.
 
 Application and notification icons follow Plasma's separate roles: a small application
 icon appears beside the application name in the header, while an optional content icon

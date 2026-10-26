@@ -16,7 +16,9 @@ add_library(notification-support STATIC
     src/config.cpp
     src/popuplayout.cpp
     src/notificationactions.cpp
+    src/notificationinhibition.cpp
 )
+set_target_properties(notification-support PROPERTIES AUTOMOC ON)
 target_include_directories(notification-support PUBLIC src)
 target_link_libraries(notification-support PUBLIC Qt6::Core Qt6::Gui Qt6::DBus KF6::Service PkgConfig::LIBSYSTEMD)
 
@@ -46,6 +48,11 @@ if(BUILD_TESTING)
     add_test(NAME notification-tests
         COMMAND dbus-run-session -- $<TARGET_FILE:notification-tests>)
     set_tests_properties(notification-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_executable(inhibition-tests tests/inhibition_test.cpp)
+    set_target_properties(inhibition-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(inhibition-tests PRIVATE notification-support Qt6::Test)
+    add_test(NAME inhibition-tests
+        COMMAND dbus-run-session -- $<TARGET_FILE:inhibition-tests>)
 endif()
 
 include(GNUInstallDirs)
