@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Plasma Notification Mirror
+Comment=Mirror Plasma notification popups to additional monitors
+Exec=plasma-notification-mirror
+Icon=preferences-desktop-notification
+Terminal=false
+NoDisplay=true

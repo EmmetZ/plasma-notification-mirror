@@ -901,6 +901,7 @@ private:
 
 int main(int argc, char **argv)
 {
+    QGuiApplication::setDesktopFileName(QStringLiteral("plasma-notification-mirror"));
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("plasma-notification-mirror"));
 

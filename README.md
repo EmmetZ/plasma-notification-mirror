@@ -66,7 +66,7 @@ cmake --build build -j$(nproc)
 
 ## Install for the current user
 
-Install the binary, example configuration, and systemd user service under `~/.local`:
+Install the binary, example configuration, desktop entry, and systemd user service under `~/.local`:
 
 ```bash
 cmake --install build --prefix "$HOME/.local"
@@ -77,6 +77,9 @@ systemctl --user enable --now plasma-notification-mirror.service
 
 No configuration file is required.
 
+The hidden desktop entry supplies the application's identity to Qt and desktop
+portals. Keep it installed even when starting the mirror through systemd.
+
 Every non-primary monitor is selected automatically. Notifications appear in the bottom-right corner using the built-in defaults; the primary monitor is always left to Plasma.
 
 ### Manual installation
@@ -84,13 +87,16 @@ Every non-primary monitor is selected automatically. Notifications appear in the
 If you prefer to install the files manually:
 
 ```bash
-mkdir -p ~/.local/bin ~/.config/systemd/user
+mkdir -p ~/.local/bin ~/.config/systemd/user ~/.local/share/applications
 
 cp build/plasma-notification-mirror \
   ~/.local/bin/plasma-notification-mirror
 
 cp systemd/plasma-notification-mirror.service \
   ~/.config/systemd/user/
+
+cp data/plasma-notification-mirror.desktop \
+  ~/.local/share/applications/
 
 systemctl --user daemon-reload
 systemctl --user enable --now plasma-notification-mirror.service
@@ -430,6 +436,14 @@ journalctl --user \
 
 ## Updating
 
+The service starts with `graphical-session.target`, after the Wayland session is
+ready. Older installations enabled it under `default.target`, which could start it
+before a display was available and cause Qt initialization failures and restart
+loops. After installing an updated service file, run
+`systemctl --user reenable plasma-notification-mirror.service` to migrate the enable
+symlink. If a manually installed unit exists in `~/.config/systemd/user/`, update
+that copy too; it takes precedence over the CMake-installed unit.
+
 Pull and rebuild:
 
 ```bash
@@ -444,6 +458,7 @@ If installed with `cmake --install`:
 ```bash
 cmake --install build --prefix "$HOME/.local"
 systemctl --user daemon-reload
+systemctl --user reenable plasma-notification-mirror.service
 systemctl --user restart plasma-notification-mirror.service
 ```
 
@@ -473,6 +488,7 @@ systemctl --user disable --now plasma-notification-mirror.service
 
 rm -f ~/.local/bin/plasma-notification-mirror
 rm -f ~/.local/share/systemd/user/plasma-notification-mirror.service
+rm -f ~/.local/share/applications/plasma-notification-mirror.desktop
 rm -rf ~/.local/share/plasma-notification-mirror
 
 systemctl --user daemon-reload
@@ -485,6 +501,7 @@ systemctl --user disable --now plasma-notification-mirror.service
 
 rm -f ~/.config/systemd/user/plasma-notification-mirror.service
 rm -f ~/.local/bin/plasma-notification-mirror
+rm -f ~/.local/share/applications/plasma-notification-mirror.desktop
 
 systemctl --user daemon-reload
 ```

@@ -68,3 +68,7 @@ install(FILES config/config.example.ini
 install(FILES systemd/plasma-notification-mirror.service
     DESTINATION ${CMAKE_INSTALL_DATADIR}/systemd/user
 )
+
+install(FILES data/plasma-notification-mirror.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+)
